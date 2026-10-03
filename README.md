@@ -87,6 +87,8 @@ must outlive its handles. Streams may have one read and one write in flight at
 once. Listeners currently allow one pending accept. Keep streams, buffers, and
 borrowed arguments alive until their operations finish. Do not move a stream
 while an operation borrows it. Nested `block_on()` is prohibited.
+All I/O inside a `block_on()` call must belong to that same context; it cannot
+drive a different context's completion port.
 
 Out-of-memory and broken runtime invariants terminate; they are not recoverable
 Results. Exception-free does not mean every conceivable failure is recoverable.

@@ -35,3 +35,7 @@ zero; use real_time for this suite. Repeat close results before drawing conclusi
 The initial exploratory run showed comparable performance, not a demonstrated
 Weave advantage. The first reproducible baseline belongs under benchmarks/results
 with its raw data and environment, not only a favorable summary table.
+
+The [first recorded baseline](../benchmarks/results/2026-10-03-windows/README.md)
+includes both raw JSON and environment metadata. Its variability is too high
+for a reliable performance gate.

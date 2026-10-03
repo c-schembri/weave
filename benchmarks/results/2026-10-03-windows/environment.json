@@ -1,0 +1,24 @@
+{
+    "timestamp":  "2026-10-03T10:49:00.1675220+10:00",
+    "revision":  "0b060a15452d8816b1bb4a730376039e0fc7aadc",
+    "worktree":  [
+
+                 ],
+    "cpu":  [
+                {
+                    "Name":  "AMD Ryzen 9 9900X 12-Core Processor            ",
+                    "NumberOfCores":  12,
+                    "NumberOfLogicalProcessors":  24
+                }
+            ],
+    "os":  {
+               "Caption":  "Microsoft Windows 11 Pro",
+               "Version":  "10.0.22631",
+               "BuildNumber":  "22631"
+           },
+    "compiler":  "MSVC x64; see build/windows/CMakeFiles/*/CMakeCXXCompiler.cmake for exact version",
+    "cmake":  "cmake version 3.31.6-msvc6",
+    "seconds":  0.5,
+    "repetitions":  5,
+    "configuration":  "Release"
+}
