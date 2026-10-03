@@ -1,0 +1,31 @@
+name: Windows
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  correctness:
+    runs-on: windows-2022
+    strategy:
+      matrix:
+        include:
+          - configuration: debug
+            configure: windows
+          - configuration: release
+            configure: windows
+          - configuration: asan
+            configure: asan
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake --preset ${{ matrix.configure }}
+      - run: cmake --build --preset ${{ matrix.configuration }} --parallel
+      - run: ctest --preset ${{ matrix.configuration }}
+      - name: Benchmark smoke test (not a performance gate)
+        if: matrix.configuration == 'release'
+        run: ./build/windows/Release/weave_bench.exe --benchmark_min_time=0.01s --benchmark_out=build/windows/smoke.json --benchmark_out_format=json
+      - uses: actions/upload-artifact@v4
+        if: matrix.configuration == 'release'
+        with:
+          name: benchmark-smoke
+          path: build/windows/smoke.json
