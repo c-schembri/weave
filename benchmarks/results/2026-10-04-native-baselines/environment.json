@@ -1,0 +1,171 @@
+{
+    "recorded":  "2026-10-04T01:36:54.5026102+10:00",
+    "revision":  "b0dc9c8d4d47e4507aadd6e8e86cd2cc9cf74803",
+    "worktree_dirty":  true,
+    "worktree_note":  "Both executables include earlier uncommitted runtime work. The saved before executable predates this change. This task adds benchmark dependencies, native callback adapters, fixtures and sharded Asio CPU cases, and extracts identical CPU work to a shared header; no Weave runtime source changes. Not a clean-commit A/B.",
+    "worktree":  [
+                     " M AGENTS.md",
+                     " M CMakeLists.txt",
+                     " M README.md",
+                     " M benchmarks/tcp.cpp",
+                     " M docs/architecture.md",
+                     " M docs/benchmarks.md",
+                     " M examples/echo.cpp",
+                     " M include/weave/async.hpp",
+                     " M include/weave/weave.hpp",
+                     " M scripts/bench.ps1",
+                     " M src/iocp.cpp",
+                     " M tests/tests.cpp",
+                     "?? .clang-format",
+                     "?? .vscode/",
+                     "?? benchmarks/asio_pool.hpp",
+                     "?? benchmarks/common.hpp",
+                     "?? benchmarks/connections.cpp",
+                     "?? benchmarks/cpu_work.hpp",
+                     "?? benchmarks/main.cpp",
+                     "?? benchmarks/multicore.cpp",
+                     "?? benchmarks/native.cpp",
+                     "?? benchmarks/results/2026-10-03-frame-recycling/",
+                     "?? benchmarks/results/2026-10-03-iocp-tuning/",
+                     "?? benchmarks/results/2026-10-03-many-connections/",
+                     "?? benchmarks/results/2026-10-03-multicore/",
+                     "?? benchmarks/results/2026-10-03-schedulers/",
+                     "?? benchmarks/results/2026-10-04-native-baselines/",
+                     "?? benchmarks/workloads.cpp",
+                     "?? docs/runtime.md",
+                     "?? examples/multicore.cpp",
+                     "?? include/weave/detail/",
+                     "?? include/weave/runtime.hpp",
+                     "?? src/runtime.cpp",
+                     "?? support/asio_config.hpp",
+                     "?? support/async_echo_peer.hpp",
+                     "?? support/callback_clients.hpp",
+                     "?? support/callback_loop.hpp",
+                     "?? support/callback_pool.hpp",
+                     "?? tests/benchmark_fixtures.cpp",
+                     "?? tests/frame_allocator.cpp",
+                     "?? tests/native_clients.cpp",
+                     "?? tests/runtime.cpp"
+                 ],
+    "cpu":  [
+                {
+                    "Name":  "AMD Ryzen 9 9900X 12-Core Processor            ",
+                    "NumberOfCores":  12,
+                    "NumberOfLogicalProcessors":  24
+                }
+            ],
+    "os":  {
+               "Caption":  "Microsoft Windows 11 Pro",
+               "Version":  "10.0.22631",
+               "BuildNumber":  "22631"
+           },
+    "power_plan":  "Power Scheme GUID: 3788a7ec-ca7c-4941-942c-7bba0cf51f8b  (Ultimate Performance)",
+    "compiler":  "MSVC 19.44.35221.0 x64",
+    "cmake":  "cmake version 3.31.6-msvc6",
+    "configuration":  "Release",
+    "release_flags":  "/O2 /Ob2 /DNDEBUG",
+    "client_flags":  "/W4 /permissive- /EHs-c-; _HAS_EXCEPTIONS=0; ASIO_NO_EXCEPTIONS",
+    "weave_recycle_frames":  true,
+    "asio_recycle_frames":  true,
+    "weave_profile_runtime":  false,
+    "asan_for_timing":  false,
+    "isolated_host":  false,
+    "process_affinity_pinned":  false,
+    "random_interleaving":  true,
+    "durations_are":  "Minimum requested per repetition; Google Benchmark calibrates iterations and may run longer.",
+    "asio_revision":  "366dfc44640182cb21c1ebf7efb658a6bec13f5a",
+    "benchmark_revision":  "31c66f47f60d06790a4885a261d682ba339bd100",
+    "libuv_version":  "1.53.0",
+    "libuv_revision":  "840404ce8ba7cc0204be52389a6cfff9f2c90fb6",
+    "usockets_revision":  "7a7c820db4740c2a2a4faf0d918c4eec2ac1fac3",
+    "usockets_definitions":  [
+                                 "LIBUS_USE_LIBUV",
+                                 "LIBUS_NO_SSL"
+                             ],
+    "native_topology":  "One loop per worker, fixed connection affinity. Benchmark intrusive mutex queue plus uv_async_send; one std::future per multicore job. Single-thread cases have no cross-thread futures.",
+    "native_receiving":  "Continuous callbacks; libuv receives into application storage, uSockets copies from its library-owned receive buffer. Both accumulate and validate the same logical echo payloads.",
+    "many_connections":  {
+                             "peer_stopped_first":  true,
+                             "client_workers":  [
+                                                    1,
+                                                    4,
+                                                    8
+                                                ],
+                             "payload_bytes":  1024,
+                             "rounds_per_connection":  32,
+                             "peer_workers":  4,
+                             "connections":  1024,
+                             "bytes_both_directions":  67108864
+                         },
+    "validation":  {
+                       "asan_fixture_repeats":  10,
+                       "benchmark_cases":  120,
+                       "fixture_cases":  15,
+                       "asan_ctest":  "3/3 targets passed, including 120-case smoke and instrumented Benchmark/libuv/uSockets",
+                       "debug_ctest":  "3/3 targets passed",
+                       "release_ctest":  "3/3 targets passed",
+                       "correctness_cases":  33
+                   },
+    "confirmation_filter":  "^((Weave|Asio|Libuv|Usockets)/1024/|(Weave|Asio|Libuv|Usockets)Bulk/8388608/|(WeaveMulticoreTcp|WeaveStealingTcp|AsioMulticoreTcp\u003c(false|true)\u003e|LibuvMulticoreTcp|UsocketsMulticoreTcp)/8/|(WeaveManyConnections|WeaveStealingManyConnections|AsioManyConnections\u003c(false|true)\u003e|LibuvManyConnections|UsocketsManyConnections)/connections:1024/workers:4/)",
+    "run_order":  [
+                      {
+                          "file":  "before.json",
+                          "started":  "2026-10-04T01:17:31+10:00",
+                          "minimum_seconds":  0.5,
+                          "repetitions":  5,
+                          "cases":  68,
+                          "samples":  340,
+                          "errors":  0,
+                          "sha256":  "EA7AC14B6BB08CF5AAFBECD1EB480A502755F7FE087130034B691C4747AAD47B"
+                      },
+                      {
+                          "file":  "after.json",
+                          "started":  "2026-10-04T01:22:27+10:00",
+                          "minimum_seconds":  0.5,
+                          "repetitions":  5,
+                          "cases":  120,
+                          "samples":  600,
+                          "errors":  0,
+                          "sha256":  "8C5C33F7D5F9820E2145D04A33BB0A04187CC941DCF22E75044CAEE956F99DDD"
+                      },
+                      {
+                          "file":  "confirmation-after.json",
+                          "started":  "2026-10-04T01:31:47+10:00",
+                          "minimum_seconds":  1,
+                          "repetitions":  5,
+                          "cases":  20,
+                          "samples":  100,
+                          "errors":  0,
+                          "sha256":  "E22253514DCE605AA3E77EDD91C976F994F16EA7838DF6C37296DA6FB6B941FB"
+                      },
+                      {
+                          "file":  "confirmation-before.json",
+                          "started":  "2026-10-04T01:34:29+10:00",
+                          "minimum_seconds":  1,
+                          "repetitions":  5,
+                          "cases":  12,
+                          "samples":  60,
+                          "errors":  0,
+                          "sha256":  "1C3521FEE6F87F5C91BFD1445A258516003F7C397C1059B1E22606305A5DEBB6"
+                      }
+                  ],
+    "caveats":  [
+                    "Loopback client-load measurements, not server accept scaling, remote networking or p99 latency.",
+                    "Retain first-sweep noisy results; the focused followup uses longer repetitions and reverses executable order.",
+                    "All raw repetitions were checked for errors and exactly five samples per case; aggregate-only reporting was not used.",
+                    "Coroutine-only microbenchmarks have no native callback equivalent. CPU comparisons include the benchmark submission adapter.",
+                    "Affine and shared/stealing scheduling are separately labelled; compare skewed CPU work only at identical worker counts."
+                ],
+    "executables":  [
+                        {
+                            "path":  "out/native-baselines/before.exe",
+                            "sha256":  "0CECACF4C92DFE7F8DC4A1CCFE5172D0372CDAC20D9ACABD6ACC826B2C77FAE6",
+                            "role":  "Saved pre-change harness"
+                        },
+                        {
+                            "path":  "build/windows/Release/weave_bench.exe",
+                            "sha256":  "B7DBCDA97BDC2BE0C93D4A68B4B87F6CB21A66F07BC9D3428048CAD38D9CE6B0",
+                            "role":  "Four-library harness"
+                        }
+                    ]
+}

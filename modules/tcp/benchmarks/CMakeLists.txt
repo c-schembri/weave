@@ -1,0 +1,6 @@
+weave_benchmark_group(tcp latency.cpp workloads.cpp native.cpp)
+target_link_libraries(weave_bench_tcp PRIVATE weave::tcp weave_usockets)
+if(TARGET weave_runtime)
+  target_sources(weave_bench_tcp PRIVATE multicore.cpp connections.cpp)
+  target_link_libraries(weave_bench_tcp PRIVATE weave::runtime)
+endif()

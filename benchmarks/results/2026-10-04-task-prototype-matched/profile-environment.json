@@ -1,0 +1,13 @@
+{
+    "timestamp":  "2026-10-04T04:41:40.6240195+11:00",
+    "purpose":  "Diagnostic counters only; do not compare timings with uninstrumented evidence",
+    "configuration":  "Release; WEAVE_PROFILE_RUNTIME=ON; exceptions disabled; frame recycler on",
+    "repetitions":  3,
+    "seconds":  0.05,
+    "filter":  "Weave.*Task.*error_pct:(0|100)/",
+    "executable":  {
+                       "Algorithm":  "SHA256",
+                       "Hash":  "21A2AEE833F9E233B7FD885C90AE86B9347A1338F5D740D01FE6A021D7CD45DE",
+                       "Path":  "C:\\Projects\\weave\\out\\weave2-profile\\Release\\weave2_bench.exe"
+                   }
+}

@@ -1,0 +1,42 @@
+function(weave_no_exceptions target)
+  if(MSVC)
+    target_compile_options(${target} PRIVATE /W4 /permissive- /EHs-c-)
+    target_compile_definitions(${target} PRIVATE _HAS_EXCEPTIONS=0)
+  else()
+    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -fno-exceptions)
+  endif()
+endfunction()
+
+function(weave_module name)
+  set(target weave_${name})
+  add_library(weave::${name} ALIAS ${target})
+  get_target_property(kind ${target} TYPE)
+  if(kind STREQUAL "INTERFACE_LIBRARY")
+    set(scope INTERFACE)
+  else()
+    set(scope PUBLIC)
+    weave_no_exceptions(${target})
+  endif()
+  set_target_properties(${target} PROPERTIES EXPORT_NAME ${name})
+  target_include_directories(${target} ${scope}
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+  install(TARGETS ${target} EXPORT weave-${name}-targets
+    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
+  install(DIRECTORY include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+  install(EXPORT weave-${name}-targets NAMESPACE weave::
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/weave")
+endfunction()
+
+function(weave_add_test target)
+  add_executable(${target} ${ARGN})
+  target_link_libraries(${target} PRIVATE doctest::doctest)
+  target_compile_definitions(${target} PRIVATE DOCTEST_CONFIG_NO_EXCEPTIONS_BUT_WITH_ALL_ASSERTS)
+  weave_no_exceptions(${target})
+  add_test(NAME ${target} COMMAND ${target})
+  set_tests_properties(${target} PROPERTIES TIMEOUT 180)
+  if(WEAVE_ENABLE_ASAN AND MSVC)
+    set_tests_properties(${target} PROPERTIES
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${WEAVE_COMPILER_BIN}")
+  endif()
+endfunction()

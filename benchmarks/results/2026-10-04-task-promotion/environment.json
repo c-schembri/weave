@@ -1,0 +1,244 @@
+{
+    "timestamp":  "2026-10-04T08:35:30.7846729+11:00",
+    "revision":  "b0dc9c8d4d47e4507aadd6e8e86cd2cc9cf74803",
+    "worktree":  [
+                     " M AGENTS.md",
+                     " M CMakeLists.txt",
+                     " M README.md",
+                     " M benchmarks/tcp.cpp",
+                     " M docs/architecture.md",
+                     " M docs/benchmarks.md",
+                     " M examples/echo.cpp",
+                     " D include/weave/async.hpp",
+                     " M include/weave/weave.hpp",
+                     " M scripts/bench.ps1",
+                     " M src/iocp.cpp",
+                     " M tests/tests.cpp",
+                     "?? .clang-format",
+                     "?? .vscode/",
+                     "?? benchmarks/asio_pool.hpp",
+                     "?? benchmarks/common.hpp",
+                     "?? benchmarks/concurrent.cpp",
+                     "?? benchmarks/connections.cpp",
+                     "?? benchmarks/cpu_work.hpp",
+                     "?? benchmarks/main.cpp",
+                     "?? benchmarks/multicore.cpp",
+                     "?? benchmarks/native.cpp",
+                     "?? benchmarks/results/2026-10-03-frame-recycling/",
+                     "?? benchmarks/results/2026-10-03-iocp-tuning/",
+                     "?? benchmarks/results/2026-10-03-many-connections/",
+                     "?? benchmarks/results/2026-10-03-multicore/",
+                     "?? benchmarks/results/2026-10-03-schedulers/",
+                     "?? benchmarks/results/2026-10-04-ci-gate-5m-run2/",
+                     "?? benchmarks/results/2026-10-04-ci-gate-5m/",
+                     "?? benchmarks/results/2026-10-04-concurrent-parity-focused/",
+                     "?? benchmarks/results/2026-10-04-concurrent-parity/",
+                     "?? benchmarks/results/2026-10-04-native-baselines/",
+                     "?? benchmarks/results/2026-10-04-paired-ci-gate/",
+                     "?? benchmarks/results/2026-10-04-task-promotion/",
+                     "?? benchmarks/results/2026-10-04-task-prototype-matched/",
+                     "?? benchmarks/results/2026-10-04-task-prototype/",
+                     "?? benchmarks/tasks.cpp",
+                     "?? benchmarks/workloads.cpp",
+                     "?? docs/concurrent.md",
+                     "?? docs/gate.md",
+                     "?? docs/migration.md",
+                     "?? docs/runtime.md",
+                     "?? docs/tasks.md",
+                     "?? examples/echo_servers/",
+                     "?? examples/multicore.cpp",
+                     "?? include/weave/detail/",
+                     "?? include/weave/runtime.hpp",
+                     "?? include/weave/task.hpp",
+                     "?? scripts/analyze-concurrent.ps1",
+                     "?? scripts/bench-concurrent.ps1",
+                     "?? scripts/check-concurrent-gate.ps1",
+                     "?? scripts/run-concurrent-gate.ps1",
+                     "?? scripts/support/",
+                     "?? src/runtime.cpp",
+                     "?? support/asio_config.hpp",
+                     "?? support/async_echo_peer.hpp",
+                     "?? support/benchmark_affinity.hpp",
+                     "?? support/callback_clients.hpp",
+                     "?? support/callback_loop.hpp",
+                     "?? support/callback_pool.hpp",
+                     "?? support/peer_process.hpp",
+                     "?? tests/benchmark_affinity.cpp",
+                     "?? tests/benchmark_fixtures.cpp",
+                     "?? tests/echo_example.ps1",
+                     "?? tests/frame_allocator.cpp",
+                     "?? tests/gate.ps1",
+                     "?? tests/gate_process.ps1",
+                     "?? tests/native_clients.cpp",
+                     "?? tests/paired_smoke.ps1",
+                     "?? tests/runtime.cpp",
+                     "?? tests/support/",
+                     "?? tests/task.cpp",
+                     "?? tests/task_concurrent.cpp"
+                 ],
+    "cpu":  [
+                {
+                    "Name":  "AMD Ryzen 9 9900X 12-Core Processor            ",
+                    "NumberOfCores":  12,
+                    "NumberOfLogicalProcessors":  24
+                }
+            ],
+    "os":  {
+               "Caption":  "Microsoft Windows 11 Pro",
+               "Version":  "10.0.22631",
+               "BuildNumber":  "22631"
+           },
+    "power_scheme":  "Power Scheme GUID: 3788a7ec-ca7c-4941-942c-7bba0cf51f8b  (Ultimate Performance)",
+    "configuration":  "Release; exceptions disabled; native Task IOCP; separate peer process",
+    "reference":  "Current Task with explicit as_result checks versus automatic propagation; not a historical release baseline",
+    "compiler":  [
+                     "set(CMAKE_CXX_COMPILER_VERSION \"19.44.35221.0\")"
+                 ],
+    "duration_ms":  250,
+    "profile":  "weave-task-policy-5m-v1",
+    "repetitions":  7,
+    "filter":  ".",
+    "peer_workers":  4,
+    "random_interleaving":  false,
+    "pairing":  "Same fixture; ABBA/BAAB; explicit/explicit controls and explicit/automatic comparison; all blocks retained",
+    "isolate_cpus":  true,
+    "limits":  {
+                   "cpu_cycles_per_op_regression_pct":  5,
+                   "throughput_regression_pct":  5,
+                   "p99_regression_pct":  10
+               },
+    "cpu_accounting":  "GetProcessTimes CPU seconds/core equivalents and QueryProcessCycleTime cycles per operation; no conversion from cycles to elapsed time",
+    "latency":  "Closed-loop, every completed RTT recorded, p99 per repetition; no coordinated-omission correction or open-loop arrival model",
+    "executable":  {
+                       "Algorithm":  "SHA256",
+                       "Hash":  "186C93E98E14A62ED6676F5CA7FEBAFCF8AE05941A985B8F881A9127AFFDCA78",
+                       "Path":  "C:\\Projects\\weave\\build\\windows\\Release\\weave_concurrent.exe"
+                   },
+    "sources":  [
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "0C8E10FD88AE394184A15709800C2AF068F8D4F4DE57954E66AE7E08FA3F62AE",
+                        "Path":  "C:\\Projects\\weave\\include\\weave\\runtime.hpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "62CE3BBDF4158076759F3D2655909850D309F87D91A35EC8ED948AF8B6538E0C",
+                        "Path":  "C:\\Projects\\weave\\include\\weave\\task.hpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "CE735FEF3F4A88C1A55CA85C0DAC50A34AA155623FB9A6C40276DED76E37EA9D",
+                        "Path":  "C:\\Projects\\weave\\include\\weave\\weave.hpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "E7387C42A99B8A784D1327FDE1F31A17FF4CB926D72CD94227671B5BE609A550",
+                        "Path":  "C:\\Projects\\weave\\include\\weave\\detail\\frame_allocator.hpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "436F39503F8B13BE0104744AA2B561F603EE770AD3A055A38593A517F84D8A98",
+                        "Path":  "C:\\Projects\\weave\\src\\iocp.cpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "CA25762D6A36E6B78704D353A4B926515591488732112014D4E30A5CD10C30B4",
+                        "Path":  "C:\\Projects\\weave\\src\\runtime.cpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "01B2562D51ECF1E2C96D493F66D9D77B55EB5AA21952DE9877E64B74BEEECF1C",
+                        "Path":  "C:\\Projects\\weave\\support\\asio_config.hpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "5DF079B5393628EB864ED53AE6B278512C9ABA34C8FFAE8465570E973F195715",
+                        "Path":  "C:\\Projects\\weave\\support\\async_echo_peer.hpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "3740E37F396E934570623D669D9ADA9A30097843B269E0E7D41DE12B4C94336A",
+                        "Path":  "C:\\Projects\\weave\\support\\benchmark_affinity.hpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "72B775F2AA7E9847DDAA92350DEAC7F603C03932A0EF07ACC47E9E398E37188E",
+                        "Path":  "C:\\Projects\\weave\\support\\callback_clients.hpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "00B35B8E9E93116154CA2954BDD1FD1AE61EDBBADB8396C667262319879CCC20",
+                        "Path":  "C:\\Projects\\weave\\support\\callback_loop.hpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "724A3C572FDDD3D106BD8EAE4DBF8D0D1EC80EC1F7E67326199843AC232A37B1",
+                        "Path":  "C:\\Projects\\weave\\support\\callback_pool.hpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "5C1AD5D9045D4080CAC7C47A5C0D13B954EEE88AC4427E1EFA1C7C4F4D0D0EAC",
+                        "Path":  "C:\\Projects\\weave\\support\\echo_peer.hpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "DA0F84ABE2433C3D1479AFCAB5E86A337F2C6C3B4287BEF0D92C260D5444716E",
+                        "Path":  "C:\\Projects\\weave\\support\\peer_process.hpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "64C70FDD1686BD1994271C3D4D81BF2CA82931B4C073C70B9FABB1B5C4C90FEA",
+                        "Path":  "C:\\Projects\\weave\\scripts\\support\\gate_process.ps1"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "30775051A36B185969176CEC80B216B1DFA1EBA9C9A3FB39B03858A0830F5DC1",
+                        "Path":  "C:\\Projects\\weave\\scripts\\support\\paired_stats.ps1"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "4731EC5F46702170D77836FDD307F99C356A8CAB97BD6C1CB2035485AD2F555C",
+                        "Path":  "C:\\Projects\\weave\\benchmarks\\concurrent.cpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "025873CFFBB5982765B610761B4BF2A35078A8B3E6AEBA846D13235D9926D7FD",
+                        "Path":  "C:\\Projects\\weave\\CMakeLists.txt"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "550BA6B3AF2799E645E04772648EB6CDE55ED7B6F2FD30F0C3203A0496FB0D68",
+                        "Path":  "C:\\Projects\\weave\\scripts\\bench-concurrent.ps1"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "684C1C2D8E0FC4550A876AFE8CE0E89C13E631E2BA17D3D3B35A90BA501FDA0A",
+                        "Path":  "C:\\Projects\\weave\\scripts\\analyze-concurrent.ps1"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "BC8805EF9BC67898F7E2DAAFE09501849BD6D985888D2798A2D607DEE0C60921",
+                        "Path":  "C:\\Projects\\weave\\scripts\\check-concurrent-gate.ps1"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "51F13B85F925A98D4D26CDA98BE11AF2D5148BD8FB2214922997EEBB7E9FA992",
+                        "Path":  "C:\\Projects\\weave\\scripts\\run-concurrent-gate.ps1"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "F6E4EAA30B2861BCB0C6166EF006B8252FB99878AB49B584CA2826C6AC13B8EC",
+                        "Path":  "C:\\Projects\\weave\\docs\\gate.md"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "C04A5804157CD2CB89097E242A1CBD93F7FC45B96AC8526B65D126229A29977D",
+                        "Path":  "C:\\Projects\\weave\\benchmarks\\common.hpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "95DD992A56505B98BD18654C8F8C4501889BCF59B58DA8F7D833776B9E9624F3",
+                        "Path":  "C:\\Projects\\weave\\benchmarks\\asio_pool.hpp"
+                    }
+                ]
+}

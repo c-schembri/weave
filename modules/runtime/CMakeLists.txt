@@ -1,0 +1,7 @@
+add_library(weave_runtime STATIC src/runtime.cpp)
+weave_module(runtime)
+target_link_libraries(weave_runtime PUBLIC weave::io)
+if(WEAVE_BUILD_TESTS)
+  weave_add_test(weave_runtime_tests tests/runtime.cpp)
+  target_link_libraries(weave_runtime_tests PRIVATE weave::runtime)
+endif()

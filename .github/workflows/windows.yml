@@ -1,31 +1,65 @@
 name: Windows
+
 on:
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  correctness:
+  test:
+    name: MSVC / ${{ matrix.configuration }}
     runs-on: windows-2022
+    timeout-minutes: 15
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - configuration: debug
-            configure: windows
-          - configuration: release
-            configure: windows
-          - configuration: asan
+          - configuration: Debug
+            configure: windows-ci
+            preset: ci-debug
+            directory: build/windows-ci
+          - configuration: Release
+            configure: windows-ci
+            preset: ci-release
+            directory: build/windows-ci
+          - configuration: AddressSanitizer
             configure: asan
+            preset: asan
+            directory: build/asan
+    defaults:
+      run:
+        shell: pwsh
     steps:
-      - uses: actions/checkout@v4
-      - run: cmake --preset ${{ matrix.configure }}
-      - run: cmake --build --preset ${{ matrix.configuration }} --parallel
-      - run: ctest --preset ${{ matrix.configuration }}
-      - name: Benchmark smoke test (not a performance gate)
-        if: matrix.configuration == 'release'
-        run: ./build/windows/Release/weave_bench.exe --benchmark_min_time=0.01s --benchmark_out=build/windows/smoke.json --benchmark_out_format=json
-      - uses: actions/upload-artifact@v4
-        if: matrix.configuration == 'release'
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          name: benchmark-smoke
-          path: build/windows/smoke.json
+          persist-credentials: false
+
+      - name: Configure without benchmarks
+        run: cmake --preset ${{ matrix.configure }} -DWEAVE_BUILD_BENCHMARKS=OFF
+
+      - name: Build tests and examples
+        run: cmake --build --preset ${{ matrix.preset }} --parallel 4
+
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }} --label-exclude benchmark --no-tests=error --output-junit "$env:GITHUB_WORKSPACE/${{ matrix.directory }}/test-results.xml"
+
+      - name: Upload test reports
+        if: always() && !cancelled()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: windows-${{ matrix.preset }}-tests
+          path: |
+            ${{ matrix.directory }}/test-results.xml
+            ${{ matrix.directory }}/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
+          retention-days: 7

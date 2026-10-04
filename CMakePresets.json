@@ -6,7 +6,24 @@
       "displayName": "Windows x64 (Visual Studio 2022)",
       "generator": "Visual Studio 17 2022",
       "architecture": "x64",
-      "binaryDir": "${sourceDir}/build/windows"
+      "binaryDir": "${sourceDir}/build/windows",
+      "cacheVariables": {
+        "WEAVE_MODULES": "core;io;runtime;tcp",
+        "WEAVE_BUILD_TESTS": "ON",
+        "WEAVE_BUILD_BENCHMARKS": "ON",
+        "WEAVE_BUILD_EXAMPLES": "ON"
+      }
+    },
+    {
+      "name": "windows-ci",
+      "displayName": "Windows correctness tests (no benchmarks)",
+      "inherits": "windows",
+      "binaryDir": "${sourceDir}/build/windows-ci",
+      "cacheVariables": {
+        "WEAVE_BUILD_TESTS": "ON",
+        "WEAVE_BUILD_BENCHMARKS": "OFF",
+        "WEAVE_BUILD_EXAMPLES": "ON"
+      }
     },
     {
       "name": "asan",
@@ -21,11 +38,15 @@
   "buildPresets": [
     {"name": "debug", "configurePreset": "windows", "configuration": "Debug"},
     {"name": "release", "configurePreset": "windows", "configuration": "Release"},
+    {"name": "ci-debug", "configurePreset": "windows-ci", "configuration": "Debug"},
+    {"name": "ci-release", "configurePreset": "windows-ci", "configuration": "Release"},
     {"name": "asan", "configurePreset": "asan", "configuration": "Release"}
   ],
   "testPresets": [
     {"name": "debug", "configurePreset": "windows", "configuration": "Debug", "output": {"outputOnFailure": true}},
     {"name": "release", "configurePreset": "windows", "configuration": "Release", "output": {"outputOnFailure": true}},
+    {"name": "ci-debug", "configurePreset": "windows-ci", "configuration": "Debug", "output": {"outputOnFailure": true}, "filter": {"exclude": {"label": "benchmark"}}},
+    {"name": "ci-release", "configurePreset": "windows-ci", "configuration": "Release", "output": {"outputOnFailure": true}, "filter": {"exclude": {"label": "benchmark"}}},
     {"name": "asan", "configurePreset": "asan", "configuration": "Release", "output": {"outputOnFailure": true}}
   ]
 }

@@ -1,0 +1,168 @@
+{
+    "timestamp":  "2026-10-04T04:34:58.9436866+11:00",
+    "revision":  "b0dc9c8d4d47e4507aadd6e8e86cd2cc9cf74803",
+    "worktree":  [
+                     " M AGENTS.md",
+                     " M CMakeLists.txt",
+                     " M README.md",
+                     " M benchmarks/tcp.cpp",
+                     " M docs/architecture.md",
+                     " M docs/benchmarks.md",
+                     " M examples/echo.cpp",
+                     " M include/weave/async.hpp",
+                     " M include/weave/weave.hpp",
+                     " M scripts/bench.ps1",
+                     " M src/iocp.cpp",
+                     " M tests/tests.cpp",
+                     "?? .clang-format",
+                     "?? .vscode/",
+                     "?? benchmarks/asio_pool.hpp",
+                     "?? benchmarks/common.hpp",
+                     "?? benchmarks/connections.cpp",
+                     "?? benchmarks/cpu_work.hpp",
+                     "?? benchmarks/main.cpp",
+                     "?? benchmarks/multicore.cpp",
+                     "?? benchmarks/native.cpp",
+                     "?? benchmarks/results/2026-10-03-frame-recycling/",
+                     "?? benchmarks/results/2026-10-03-iocp-tuning/",
+                     "?? benchmarks/results/2026-10-03-many-connections/",
+                     "?? benchmarks/results/2026-10-03-multicore/",
+                     "?? benchmarks/results/2026-10-03-schedulers/",
+                     "?? benchmarks/results/2026-10-04-native-baselines/",
+                     "?? benchmarks/workloads.cpp",
+                     "?? docs/runtime.md",
+                     "?? examples/echo_servers/",
+                     "?? examples/multicore.cpp",
+                     "?? include/weave/detail/",
+                     "?? include/weave/runtime.hpp",
+                     "?? src/runtime.cpp",
+                     "?? support/asio_config.hpp",
+                     "?? support/async_echo_peer.hpp",
+                     "?? support/callback_clients.hpp",
+                     "?? support/callback_loop.hpp",
+                     "?? support/callback_pool.hpp",
+                     "?? tests/benchmark_fixtures.cpp",
+                     "?? tests/echo_example.ps1",
+                     "?? tests/frame_allocator.cpp",
+                     "?? tests/native_clients.cpp",
+                     "?? tests/runtime.cpp",
+                     "?? weave2/"
+                 ],
+    "cpu":  [
+                {
+                    "Name":  "AMD Ryzen 9 9900X 12-Core Processor            ",
+                    "NumberOfCores":  12,
+                    "NumberOfLogicalProcessors":  24
+                }
+            ],
+    "os":  {
+               "Caption":  "Microsoft Windows 11 Pro",
+               "Version":  "10.0.22631",
+               "BuildNumber":  "22631"
+           },
+    "configuration":  "Release; exceptions disabled; same binary for all three libraries",
+    "compiler":  [
+                     "set(CMAKE_CXX_COMPILER_VERSION \"19.44.35221.0\")"
+                 ],
+    "seconds":  0.25,
+    "repetitions":  7,
+    "filter":  ".",
+    "random_interleaving":  true,
+    "executable":  {
+                       "Algorithm":  "SHA256",
+                       "Hash":  "4501ABF7B35FBC56B35D8B76CA7432EF8B11518F570049BFD1D990662070DE8A",
+                       "Path":  "C:\\Projects\\weave\\out\\weave2\\Release\\weave2_bench.exe"
+                   },
+    "sources":  [
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "1BE1E9012319EFF2BC07A4C547FF333FAB9A76CD35B333C5E036DADF2685E7FF",
+                        "Path":  "C:\\Projects\\weave\\include\\weave\\async.hpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "898E7D85FC6126CCCBD28AB505F8F4505C7B15A62765F76E30CAE02DB2F4BAE8",
+                        "Path":  "C:\\Projects\\weave\\include\\weave\\runtime.hpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "97F5625816893948B2733F62163771B844A4A7D10EAB28B207C1C675DC22A8A7",
+                        "Path":  "C:\\Projects\\weave\\include\\weave\\weave.hpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "E7387C42A99B8A784D1327FDE1F31A17FF4CB926D72CD94227671B5BE609A550",
+                        "Path":  "C:\\Projects\\weave\\include\\weave\\detail\\frame_allocator.hpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "26060174F16F65C46D10CEE6ED57AD7D8C598ECEFE9BDC1979DA58FD3804E3B2",
+                        "Path":  "C:\\Projects\\weave\\src\\iocp.cpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "CA25762D6A36E6B78704D353A4B926515591488732112014D4E30A5CD10C30B4",
+                        "Path":  "C:\\Projects\\weave\\src\\runtime.cpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "01B2562D51ECF1E2C96D493F66D9D77B55EB5AA21952DE9877E64B74BEEECF1C",
+                        "Path":  "C:\\Projects\\weave\\support\\asio_config.hpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "5DF079B5393628EB864ED53AE6B278512C9ABA34C8FFAE8465570E973F195715",
+                        "Path":  "C:\\Projects\\weave\\support\\async_echo_peer.hpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "72B775F2AA7E9847DDAA92350DEAC7F603C03932A0EF07ACC47E9E398E37188E",
+                        "Path":  "C:\\Projects\\weave\\support\\callback_clients.hpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "00B35B8E9E93116154CA2954BDD1FD1AE61EDBBADB8396C667262319879CCC20",
+                        "Path":  "C:\\Projects\\weave\\support\\callback_loop.hpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "724A3C572FDDD3D106BD8EAE4DBF8D0D1EC80EC1F7E67326199843AC232A37B1",
+                        "Path":  "C:\\Projects\\weave\\support\\callback_pool.hpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "5C1AD5D9045D4080CAC7C47A5C0D13B954EEE88AC4427E1EFA1C7C4F4D0D0EAC",
+                        "Path":  "C:\\Projects\\weave\\support\\echo_peer.hpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "1F4AB76F01A0E36E392A576D663D16A239D89F6664912C53B399E1DEB2B25A6D",
+                        "Path":  "C:\\Projects\\weave\\weave2\\include\\weave2\\task.hpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "1B3F50F1E1D3300A27C1007DE4E3582B7F3808A74EEF03508A153F39D6B0A6CC",
+                        "Path":  "C:\\Projects\\weave\\weave2\\include\\weave2\\weave.hpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "71E22107DDCB4C2A790788441AA6CFB388D651D2ECA05473891EB3EB5DFE7C2F",
+                        "Path":  "C:\\Projects\\weave\\weave2\\benchmarks.cpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "06295068D0682E42422FF2D37C13CCA39C7B996FFF4FE6931B51AD112D33C3F7",
+                        "Path":  "C:\\Projects\\weave\\weave2\\CMakeLists.txt"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "3A67B7DD7EA370DA5D37958BCB88663A9B25095642157A4F21E56AB16834B54E",
+                        "Path":  "C:\\Projects\\weave\\benchmarks\\tcp.cpp"
+                    },
+                    {
+                        "Algorithm":  "SHA256",
+                        "Hash":  "C04A5804157CD2CB89097E242A1CBD93F7FC45B96AC8526B65D126229A29977D",
+                        "Path":  "C:\\Projects\\weave\\benchmarks\\common.hpp"
+                    }
+                ]
+}

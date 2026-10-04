@@ -1,0 +1,87 @@
+{
+  "context": {
+    "date": "2026-10-03T11:02:11+10:00",
+    "host_name": "ROGUE",
+    "executable": "C:\\Projects\\weave\\build\\profile\\Release\\weave_bench.exe",
+    "num_cpus": 24,
+    "mhz_per_cpu": 4392,
+    "caches": [
+      {
+        "type": "Data",
+        "level": 1,
+        "size": 49152,
+        "num_sharing": 2
+      },
+      {
+        "type": "Instruction",
+        "level": 1,
+        "size": 32768,
+        "num_sharing": 2
+      },
+      {
+        "type": "Unified",
+        "level": 2,
+        "size": 1048576,
+        "num_sharing": 2
+      },
+      {
+        "type": "Unified",
+        "level": 3,
+        "size": 33554432,
+        "num_sharing": 12
+      }
+    ],
+    "load_avg": [],
+    "library_version": "v1.9.4",
+    "library_build_type": "release",
+    "json_schema_version": 1
+  },
+  "benchmarks": [
+    {
+      "name": "WeaveBulk/1048576/real_time",
+      "family_index": 0,
+      "per_family_instance_index": 0,
+      "run_name": "WeaveBulk/1048576/real_time",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 298,
+      "real_time": 4.3371073853212016e+02,
+      "cpu_time": 0.0000000000000000e+00,
+      "time_unit": "us",
+      "bytes_per_second": 4.8353702449188662e+09,
+      "dequeues/iteration": 1.5281879194630873e+01,
+      "frame_bytes/iteration": 7.8672214765100671e+03,
+      "frames/iteration": 2.0026845637583893e+01,
+      "inline_success/iteration": 5.5369127516778525e+00,
+      "items_per_second": 2.3056842064470607e+03,
+      "packets/iteration": 1.6023489932885905e+01,
+      "reads/iteration": 1.5023489932885907e+01,
+      "writes/iteration": 1.0000000000000000e+00
+    },
+    {
+      "name": "WeaveBulk/8388608/real_time",
+      "family_index": 0,
+      "per_family_instance_index": 1,
+      "run_name": "WeaveBulk/8388608/real_time",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 20,
+      "real_time": 8.1133500032592565e+03,
+      "cpu_time": 7.8125000000000000e+02,
+      "time_unit": "us",
+      "bytes_per_second": 2.0678531054694221e+09,
+      "dequeues/iteration": 5.9850000000000001e+01,
+      "frame_bytes/iteration": 2.7959200000000001e+04,
+      "frames/iteration": 6.4900000000000006e+01,
+      "inline_success/iteration": 4.8350000000000001e+01,
+      "items_per_second": 1.2325364979919327e+02,
+      "packets/iteration": 6.0850000000000001e+01,
+      "reads/iteration": 5.9850000000000001e+01,
+      "writes/iteration": 1.0000000000000000e+00
+    }
+  ]
+}

@@ -1,0 +1,89 @@
+{
+    "date":  "2026-10-03T23:31:33.5880637+10:00",
+    "git_revision":  "b0dc9c8d4d47e4507aadd6e8e86cd2cc9cf74803",
+    "worktree_dirty":  true,
+    "worktree_note":  "Both versions include prior uncommitted IOCP, allocator, multicore and scheduler work. This addition changes benchmark infrastructure, tests and documentation, not the Weave runtime. Not a clean-commit A/B.",
+    "cpu":  [
+                {
+                    "Name":  "AMD Ryzen 9 9900X 12-Core Processor            ",
+                    "NumberOfCores":  12,
+                    "NumberOfLogicalProcessors":  24
+                }
+            ],
+    "os":  {
+               "Caption":  "Microsoft Windows 11 Pro",
+               "Version":  "10.0.22631",
+               "BuildNumber":  "22631"
+           },
+    "power_plan":  "Power Scheme GUID: 3788a7ec-ca7c-4941-942c-7bba0cf51f8b  (Ultimate Performance)",
+    "compiler":  "MSVC 19.44.35221.0 x64 Release",
+    "release_flags":  "/O2 /Ob2 /DNDEBUG",
+    "project_options":  "/W4 /permissive- /EHs-c-; _HAS_EXCEPTIONS=0; ASIO_NO_EXCEPTIONS",
+    "isolated_host":  false,
+    "weave_recycle_frames":  true,
+    "asio_recycle_frames":  true,
+    "weave_profile_runtime":  false,
+    "weave_enable_asan_for_timing":  false,
+    "asio_revision":  "366dfc44640182cb21c1ebf7efb658a6bec13f5a",
+    "benchmark_revision":  "31c66f47f60d06790a4885a261d682ba339bd100",
+    "random_interleaving":  true,
+    "connections":  1024,
+    "client_workers":  [
+                           1,
+                           4,
+                           8
+                       ],
+    "peer_workers":  4,
+    "rounds_per_connection_per_batch":  32,
+    "payload_bytes":  1024,
+    "bytes_count_both_directions":  true,
+    "final_connection_run":  {
+                                 "samples":  60,
+                                 "seconds":  1,
+                                 "repetitions":  5,
+                                 "file":  "connections.json",
+                                 "errors":  0
+                             },
+    "final_controls":  {
+                           "errors":  0,
+                           "seconds":  0.5,
+                           "repetitions":  7,
+                           "files":  [
+                                         "control-before.json",
+                                         "control-after.json"
+                                     ],
+                           "samples_per_file":  28
+                       },
+    "run_order":  [
+                      "control-before-aggregates.json",
+                      "connections-initial-aggregates.json",
+                      "control-after-aggregates.json",
+                      "control-before.json",
+                      "connections-diagnostic.json",
+                      "connections.json",
+                      "control-after.json"
+                  ],
+    "caveats":  [
+                    "Initial aggregate-only files may hide failures and are not valid comparison evidence.",
+                    "The initial 1024-connection run overlapped a TCP-state diagnostic query.",
+                    "The pre-fix diagnostic contains four connection-setup failures.",
+                    "Final workload closes peer first after exchanges join, then closes client sockets; no OS TCP settings were changed.",
+                    "All final raw samples were checked for errors. Timing is batch wall time, not request latency."
+                ],
+    "executables":  [
+                        {
+                            "path":  "out/many-connections/before.exe",
+                            "sha256":  "EEE152C339C2BE0094916F90504A64779427F6602ABCE101CF5AD5AEB9859791",
+                            "role":  "Pre-addition control"
+                        },
+                        {
+                            "sha256":  "DF608DD34B395D607131B57DC59621CC25143E996FF8FF5D415DF3B518BC1C8D",
+                            "role":  "Exploratory and diagnostic harness, client-first teardown"
+                        },
+                        {
+                            "path":  "build/windows/Release/weave_bench.exe",
+                            "sha256":  "0CECACF4C92DFE7F8DC4A1CCFE5172D0372CDAC20D9ACABD6ACC826B2C77FAE6",
+                            "role":  "Final benchmark harness, peer-first teardown"
+                        }
+                    ]
+}

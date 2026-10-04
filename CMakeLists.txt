@@ -2,84 +2,109 @@ cmake_minimum_required(VERSION 3.25)
 project(weave VERSION 0.1.0 LANGUAGES CXX)
 
 if(MSVC)
-  # CMake defaults to /EHsc; remove it rather than layering conflicting flags.
   string(REPLACE "/EHsc" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
-  # Dependencies are fetched explicitly, not through machine-wide vcpkg hooks.
   set(CMAKE_VS_GLOBALS "VcpkgEnabled=false;VcpkgApplocalDeps=false")
 endif()
 
-if(NOT WIN32)
-  message(FATAL_ERROR "Weave currently implements Windows IOCP only. Linux io_uring is planned.")
-endif()
-option(WEAVE_BUILD_TESTS "Build correctness tests" ON)
-option(WEAVE_BUILD_BENCHMARKS "Build Asio comparison benchmarks" ON)
-option(WEAVE_BUILD_EXAMPLES "Build examples" ON)
+set(WEAVE_MODULES "core;io;runtime;tcp" CACHE STRING "Components to build (dependencies are included automatically)")
+option(WEAVE_BUILD_TESTS "Build correctness tests" OFF)
+option(WEAVE_BUILD_BENCHMARKS "Build networking comparison benchmarks" OFF)
+option(WEAVE_BUILD_EXAMPLES "Build examples" OFF)
 option(WEAVE_ENABLE_ASAN "Instrument Weave and consumers with AddressSanitizer (use Release)" OFF)
+option(WEAVE_PROFILE_RUNTIME "Count coroutine allocations and I/O submissions (not for timing comparisons)" OFF)
+option(WEAVE_RECYCLE_FRAMES "Reuse coroutine frames in a bounded thread-local cache" ON)
 
-add_library(weave src/iocp.cpp)
-add_library(weave::weave ALIAS weave)
-target_compile_features(weave PUBLIC cxx_std_23)
-target_include_directories(weave PUBLIC include)
-target_compile_definitions(weave PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0602)
-target_link_libraries(weave PUBLIC ws2_32 mswsock)
-if(WEAVE_ENABLE_ASAN)
-  if(MSVC)
-    target_compile_options(weave PUBLIC /fsanitize=address /Zi)
-    target_link_options(weave PUBLIC /INCREMENTAL:NO /DEBUG)
-  else()
-    target_compile_options(weave PUBLIC -fsanitize=address -fno-omit-frame-pointer)
-    target_link_options(weave PUBLIC -fsanitize=address)
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+include(cmake/WeaveModule.cmake)
+
+set(WEAVE_ENABLED_MODULES core)
+foreach(module IN LISTS WEAVE_MODULES)
+  if(NOT module MATCHES "^(core|io|runtime|tcp)$")
+    message(FATAL_ERROR "Unknown Weave component: ${module}")
   endif()
+  list(APPEND WEAVE_ENABLED_MODULES "${module}")
+  if(module STREQUAL "runtime" OR module STREQUAL "tcp")
+    list(APPEND WEAVE_ENABLED_MODULES io)
+  endif()
+endforeach()
+list(REMOVE_DUPLICATES WEAVE_ENABLED_MODULES)
+if("io" IN_LIST WEAVE_ENABLED_MODULES AND NOT WIN32)
+  message(FATAL_ERROR "Weave IO currently implements Windows IOCP only. Linux io_uring is planned. Core is portable.")
 endif()
-function(weave_no_exceptions target)
-  if(MSVC)
-    target_compile_options(${target} PRIVATE /W4 /permissive- /EHs-c-)
-    target_compile_definitions(${target} PRIVATE _HAS_EXCEPTIONS=0)
-  else()
-    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -fno-exceptions)
-  endif()
-endfunction()
-weave_no_exceptions(weave)
 
-include(FetchContent)
 if(WEAVE_BUILD_TESTS)
   enable_testing()
+  include(FetchContent)
+  set(DOCTEST_NO_INSTALL ON CACHE BOOL "" FORCE)
   FetchContent_Declare(doctest GIT_REPOSITORY https://github.com/doctest/doctest.git
     GIT_TAG 1da23a3e8119ec5cce4f9388e91b065e20bf06f5)
   FetchContent_MakeAvailable(doctest)
-  add_executable(weave_tests tests/tests.cpp)
-  target_link_libraries(weave_tests PRIVATE weave::weave doctest::doctest)
-  target_include_directories(weave_tests PRIVATE support)
-  target_compile_definitions(weave_tests PRIVATE DOCTEST_CONFIG_NO_EXCEPTIONS_BUT_WITH_ALL_ASSERTS)
-  weave_no_exceptions(weave_tests)
-  add_test(NAME weave_tests COMMAND weave_tests)
-  set_tests_properties(weave_tests PROPERTIES TIMEOUT 45)
   if(WEAVE_ENABLE_ASAN AND MSVC)
     get_filename_component(WEAVE_COMPILER_BIN "${CMAKE_CXX_COMPILER}" DIRECTORY)
-    set_tests_properties(weave_tests PROPERTIES
-      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${WEAVE_COMPILER_BIN}")
   endif()
 endif()
 
-if(WEAVE_BUILD_BENCHMARKS)
-  set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
-  set(BENCHMARK_ENABLE_EXCEPTIONS OFF CACHE BOOL "" FORCE)
-  set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
-  FetchContent_Declare(benchmark GIT_REPOSITORY https://github.com/google/benchmark.git
-    GIT_TAG 31c66f47f60d06790a4885a261d682ba339bd100)
+# Keep dependency order explicit; each module owns its sources, headers and tests.
+foreach(module IN ITEMS core io runtime tcp)
+  if(module IN_LIST WEAVE_ENABLED_MODULES)
+    add_subdirectory(modules/${module})
+  endif()
+endforeach()
+
+configure_package_config_file(cmake/weave-config.cmake.in
+  "${CMAKE_CURRENT_BINARY_DIR}/weave-config.cmake"
+  INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/weave")
+write_basic_package_version_file("${CMAKE_CURRENT_BINARY_DIR}/weave-config-version.cmake"
+  VERSION ${PROJECT_VERSION} COMPATIBILITY SameMajorVersion)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/weave-config.cmake"
+  "${CMAKE_CURRENT_BINARY_DIR}/weave-config-version.cmake"
+  DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/weave")
+
+set(WEAVE_FULL_TESTS OFF)
+if(WEAVE_BUILD_TESTS AND TARGET weave_tcp AND TARGET weave_runtime)
+  set(WEAVE_FULL_TESTS ON)
+endif()
+if(WEAVE_FULL_TESTS OR WEAVE_BUILD_BENCHMARKS)
+  include(FetchContent)
   FetchContent_Declare(asio GIT_REPOSITORY https://github.com/chriskohlhoff/asio.git
     GIT_TAG 366dfc44640182cb21c1ebf7efb658a6bec13f5a)
-  FetchContent_MakeAvailable(benchmark asio)
-  add_executable(weave_bench benchmarks/tcp.cpp)
-  target_link_libraries(weave_bench PRIVATE weave::weave benchmark::benchmark)
-  target_include_directories(weave_bench PRIVATE support)
-  target_include_directories(weave_bench SYSTEM PRIVATE ${asio_SOURCE_DIR}/asio/include)
-  target_compile_definitions(weave_bench PRIVATE ASIO_STANDALONE ASIO_NO_EXCEPTIONS)
-  weave_no_exceptions(weave_bench)
+  FetchContent_MakeAvailable(asio)
+endif()
+if(WEAVE_FULL_TESTS)
+  weave_add_test(weave_tests tests/integration/main.cpp tests/integration/runtime.cpp
+    tests/integration/task.cpp tests/integration/task_concurrent.cpp tests/benchmark_affinity.cpp)
+  target_link_libraries(weave_tests PRIVATE weave::tcp weave::runtime)
+  target_include_directories(weave_tests PRIVATE test_support)
+  target_include_directories(weave_tests SYSTEM PRIVATE ${asio_SOURCE_DIR}/asio/include)
+  target_compile_definitions(weave_tests PRIVATE ASIO_STANDALONE ASIO_NO_EXCEPTIONS)
 endif()
 
+if(TARGET weave_tests)
+  target_compile_definitions(weave_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0602)
+endif()
+if(WEAVE_BUILD_BENCHMARKS)
+  add_subdirectory(benchmarks)
+endif()
 if(WEAVE_BUILD_EXAMPLES)
-  add_executable(weave_echo examples/echo.cpp)
-  target_link_libraries(weave_echo PRIVATE weave::weave)
-  weave_no_exceptions(weave_echo)
+  foreach(module IN LISTS WEAVE_ENABLED_MODULES)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/modules/${module}/examples/CMakeLists.txt")
+      add_subdirectory(modules/${module}/examples)
+    endif()
+  endforeach()
+endif()
+
+if(WEAVE_BUILD_TESTS)
+  add_test(NAME package_components COMMAND "${CMAKE_COMMAND}"
+    "-DWEAVE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}"
+    "-DWEAVE_WORK=${CMAKE_CURRENT_BINARY_DIR}/package-tests"
+    "-DWEAVE_GENERATOR=${CMAKE_GENERATOR}"
+    "-DWEAVE_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+    "-DWEAVE_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+    "-DWEAVE_CONFIG=$<CONFIG>"
+    "-DWEAVE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+    "-DWEAVE_TEST_MODULES=${WEAVE_ENABLED_MODULES}"
+    "-DWEAVE_ASAN=${WEAVE_ENABLE_ASAN}"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/package/components.cmake")
+  set_tests_properties(package_components PROPERTIES TIMEOUT 180 LABELS packaging)
 endif()

@@ -1,0 +1,8 @@
+add_library(weave_io STATIC src/windows/iocp.cpp)
+weave_module(io)
+target_link_libraries(weave_io PUBLIC weave::core)
+target_compile_definitions(weave_io PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0602)
+if(WEAVE_BUILD_TESTS)
+  weave_add_test(weave_io_tests tests/context.cpp)
+  target_link_libraries(weave_io_tests PRIVATE weave::io)
+endif()
