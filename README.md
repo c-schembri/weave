@@ -134,18 +134,18 @@ Installed packages support `find_package(weave CONFIG REQUIRED COMPONENTS tcp)`.
 ## Latest Windows Benchmarks
 
 <!-- benchmark-results:start -->
-Latest complete run: [`855f392`](https://github.com/c-schembri/weave/commit/855f392a781dbf42a7c41e8598874ed66d2baa86), 2026-10-06 05:43 +0000; [full results and raw evidence](https://github.com/c-schembri/weave/actions/runs/37419857460).
+Latest complete run: [`e0d7a0b`](https://github.com/c-schembri/weave/commit/e0d7a0bba7744937648f97a3fc9129c3a84b606a), 2026-10-06 05:56 +0000; [full results and raw evidence](https://github.com/c-schembri/weave/actions/runs/37420985804).
 
-Windows x64 / AMD EPYC 7763 64-Core Processor; server/client workers: 1/1, on separate cores. 7 x 1s per library/workload. Median round trips/second; higher is better.
+Windows x64 / AMD EPYC 9V45 96-Core Processor; server/client workers: 1/1, on separate cores. 7 x 1s per library/workload. Median round trips/second; higher is better.
 
 | Workload | Weave | Asio | Tokio | Max throughput CV | Notes |
 | --- | ---: | ---: | ---: | ---: | --- |
-| 64 clients / 1 KiB | 115,254 | 122,117 | 112,684 | 3.7% | client busy |
-| 1,024 clients / 1 KiB | 115,676 | 115,905 | 95,290 | 3.3% | client busy |
-| 64 clients / 64 KiB | 38,606 | 37,220 | 51,671 | 5.9% | p99 noisy; client busy |
-| 256 clients / uneven CPU | 79,045 | 74,890 | 64,412 | 3.1% | p99 noisy |
+| 64 clients / 1 KiB | 197,676 | 208,359 | 178,704 | 4.4% | p99 noisy; client busy |
+| 1,024 clients / 1 KiB | 186,416 | 191,569 | 142,218 | 4.5% | p99 noisy; client busy |
+| 64 clients / 64 KiB | 61,134 | 62,652 | 89,143 | 6.5% | p99 noisy; client busy |
+| 256 clients / uneven CPU | 122,069 | 115,690 | 96,999 | 5.3% | p99 noisy |
 
-Throughput variation is within limits. **2 library/workload p99 measurements are noisy; tail-latency comparisons involving them are inconclusive.**
+Throughput variation is within limits. **6 library/workload p99 measurements are noisy; tail-latency comparisons involving them are inconclusive.**
 
 Client busy: at least one backend's load generator used >=90% of its core budget. These are end-to-end loopback results, not maximum server capacity.
 
