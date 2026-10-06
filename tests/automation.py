@@ -26,7 +26,7 @@ class AutomationTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="weave-python-")
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve(strict=True)
 
     def test_statistics_match_original_fixed_seed_protocol(self):
         random = ProtocolRandom(3601)

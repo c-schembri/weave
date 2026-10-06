@@ -107,16 +107,22 @@ if(WEAVE_BUILD_EXAMPLES)
 endif()
 
 if(WEAVE_BUILD_TESTS)
-  add_test(NAME package_components COMMAND "${CMAKE_COMMAND}"
-    "-DWEAVE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}"
-    "-DWEAVE_WORK=${CMAKE_CURRENT_BINARY_DIR}/package-tests"
-    "-DWEAVE_GENERATOR=${CMAKE_GENERATOR}"
-    "-DWEAVE_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
-    "-DWEAVE_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
-    "-DWEAVE_CONFIG=$<CONFIG>"
-    "-DWEAVE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
-    "-DWEAVE_TEST_MODULES=${WEAVE_ENABLED_MODULES}"
-    "-DWEAVE_ASAN=${WEAVE_ENABLE_ASAN}"
-    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/package/components.cmake")
-  set_tests_properties(package_components PROPERTIES TIMEOUT 180 LABELS packaging)
+  set(package_cases ${WEAVE_ENABLED_MODULES})
+  if("tcp" IN_LIST WEAVE_ENABLED_MODULES AND "runtime" IN_LIST WEAVE_ENABLED_MODULES)
+    list(APPEND package_cases all)
+  endif()
+  foreach(component IN LISTS package_cases)
+    add_test(NAME package_components_${component} COMMAND "${CMAKE_COMMAND}"
+      "-DWEAVE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}"
+      "-DWEAVE_WORK=${CMAKE_CURRENT_BINARY_DIR}/package-tests"
+      "-DWEAVE_GENERATOR=${CMAKE_GENERATOR}"
+      "-DWEAVE_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+      "-DWEAVE_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+      "-DWEAVE_CONFIG=$<CONFIG>"
+      "-DWEAVE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+      "-DWEAVE_TEST_MODULES=${component}"
+      "-DWEAVE_ASAN=${WEAVE_ENABLE_ASAN}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/package/components.cmake")
+    set_tests_properties(package_components_${component} PROPERTIES TIMEOUT 180 LABELS packaging)
+  endforeach()
 endif()

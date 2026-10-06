@@ -136,16 +136,18 @@ Installed packages support `find_package(weave CONFIG REQUIRED COMPONENTS tcp)`.
 <!-- benchmark-results:start -->
 Latest complete run: [`855f392`](https://github.com/c-schembri/weave/commit/855f392a781dbf42a7c41e8598874ed66d2baa86), 2026-10-06 05:43 +0000; [full results and raw evidence](https://github.com/c-schembri/weave/actions/runs/37419857460).
 
-Windows x64; 1 server + 1 client workers on separate cores. 7 x 1s per library/workload. Median round trips/second; higher is better.
+Windows x64 / AMD EPYC 7763 64-Core Processor; server/client workers: 1/1, on separate cores. 7 x 1s per library/workload. Median round trips/second; higher is better.
 
 | Workload | Weave | Asio | Tokio | Max throughput CV | Notes |
 | --- | ---: | ---: | ---: | ---: | --- |
-| 64 clients / 1 KiB | 115,254 | 122,117 | 112,684 | 3.7% | within thresholds; client busy |
-| 1,024 clients / 1 KiB | 115,676 | 115,905 | 95,290 | 3.3% | within thresholds; client busy |
-| 64 clients / 64 KiB | 38,606 | 37,220 | 51,671 | 5.9% | noisy; client busy |
-| 256 clients / uneven CPU | 79,045 | 74,890 | 64,412 | 3.1% | noisy |
+| 64 clients / 1 KiB | 115,254 | 122,117 | 112,684 | 3.7% | client busy |
+| 1,024 clients / 1 KiB | 115,676 | 115,905 | 95,290 | 3.3% | client busy |
+| 64 clients / 64 KiB | 38,606 | 37,220 | 51,671 | 5.9% | p99 noisy; client busy |
+| 256 clients / uneven CPU | 79,045 | 74,890 | 64,412 | 3.1% | p99 noisy |
 
-**Noisy: comparisons are inconclusive.**
+Throughput variation is within limits. **2 library/workload p99 measurements are noisy; tail-latency comparisons involving them are inconclusive.**
+
+Client busy: at least one backend's load generator used >=90% of its core budget. These are end-to-end loopback results, not maximum server capacity.
 
 CPU use, p99/p99.9 latency, paired confidence intervals, and limitations: [benchmark protocol](docs/ci-benchmarks.md).
 <!-- benchmark-results:end -->

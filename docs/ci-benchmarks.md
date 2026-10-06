@@ -71,8 +71,10 @@ of tiny regressions or a simultaneous confidence guarantee for the full matrix.
 An interval including 1 does not establish a throughput winner.
 
 Predeclared precision warnings: throughput CV >10%, p99 CV >25%, or a paired
-interval width exceeding 20% of its median ratio. If any warning fires, the latest
-README labels the run noisy/inconclusive. We retain and publish every sample,
+interval width exceeding 20% of its median ratio. README identifies throughput
+noise separately from p99 noise: noisy comparisons are inconclusive for the
+affected metric and library/workload, not every measurement in the run. A p99
+warning does not invalidate otherwise stable throughput. We retain and publish every sample,
 including outliers, with **no adaptive stopping, automatic reruns, or cherry-picked
 best runs**. Noise is not a correctness failure and does not fail a PR. Protocol,
 payload, process, or deadline failures do fail it. This workflow is a comparison

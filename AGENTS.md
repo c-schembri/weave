@@ -96,7 +96,8 @@
   smokes. The separate Windows benchmark workflow runs only scripts/bench_ci.py's
   fixed, five-minute Weave/Asio/Tokio protocol. Do not add long research benchmarks
   or the migration gate to automatic CI. Publish complete main-branch summaries
-  in README; retain raw evidence as artifacts, and label noisy results inconclusive.
+  in README; retain raw evidence as artifacts, and label noisy comparisons inconclusive
+  for the affected metric. Do not let p99 noise invalidate stable throughput results.
 - When benchmarking, compare against the pinned Asio baseline using the same
   workload and build. Report regressions and uncertainty. Do not claim wins from
   noisy single runs.

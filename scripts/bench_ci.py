@@ -85,12 +85,38 @@ def report(samples, metadata):
                            "ci90": [low, high], "noisy": (high - low) / center > 0.20})
     for row in rows.values():
         metrics = row["metrics"]
-        row["noisy"] = (metrics["roundtrips_per_second"]["cv_pct"] > 10 or
-                        metrics["p99_us"]["cv_pct"] > 25)
+        row["throughput_noisy"] = metrics["roundtrips_per_second"]["cv_pct"] > 10
+        row["p99_noisy"] = metrics["p99_us"]["cv_pct"] > 25
+        row["noisy"] = row["throughput_noisy"] or row["p99_noisy"]
         row["client_busy"] = metrics["client_cores"]["median"] >= workers * 0.90
-    result.update({"paired": paired, "noisy": any(row["noisy"] for row in rows.values()) or
-                   any(pair["noisy"] for pair in paired)})
+    throughput_noisy = any(row["throughput_noisy"] for row in rows.values()) or any(pair["noisy"] for pair in paired)
+    p99_noisy = any(row["p99_noisy"] for row in rows.values())
+    result.update({"paired": paired, "throughput_noisy": throughput_noisy, "p99_noisy": p99_noisy,
+                   "noisy": throughput_noisy or p99_noisy})
     return result
+
+
+def quality_notes(rows, paired=()):
+    notes = []
+    if any(row["throughput_noisy"] for row in rows) or any(pair["noisy"] for pair in paired):
+        notes.append("throughput noisy")
+    if any(row["p99_noisy"] for row in rows):
+        notes.append("p99 noisy")
+    if any(row["client_busy"] for row in rows):
+        notes.append("client busy")
+    return "; ".join(notes) or "within limits"
+
+
+def precision_summary(result):
+    if result["throughput_noisy"]:
+        status = "**Noisy throughput comparisons are inconclusive; see per-case details.**"
+    else:
+        status = "Throughput variation is within limits."
+    noisy_tails = sum(row["p99_noisy"] for row in result["rows"])
+    if noisy_tails:
+        unit = "measurement is" if noisy_tails == 1 else "measurements are"
+        status += f" **{noisy_tails} library/workload p99 {unit} noisy; tail-latency comparisons involving them are inconclusive.**"
+    return status
 
 
 def compact_markdown(result, metadata):
@@ -105,9 +131,10 @@ def compact_markdown(result, metadata):
         source += " (uncommitted working tree)"
     link = f"[full results and raw evidence](https://github.com/{repository}/actions/runs/{run_id})" if run_id else "local validation"
     timestamp = datetime.fromisoformat(metadata["timestamp"]).strftime("%Y-%m-%d %H:%M %z")
-    status = "**Noisy: comparisons are inconclusive.**" if result["noisy"] else "Reported precision checks passed; not a universal performance claim."
+    cpu = ", ".join(str(cpu["Name"]) for cpu in metadata.get("cpu", [])) or "CPU not recorded"
+    cpu = cpu.replace("|", "/").replace("\r", " ").replace("\n", " ")
     lines = [f"Latest complete run: {source}, {timestamp}; {link}.", "",
-             f"Windows x64; {workers} server + {workers} client workers on separate cores. "
+             f"Windows x64 / {cpu}; server/client workers: {workers}/{workers}, on separate cores. "
              f"{REPETITIONS} x {DURATION_MS / 1000:g}s per library/workload. Median round trips/second; higher is better.", "",
              "| Workload | Weave | Asio | Tokio | Max throughput CV | Notes |",
              "| --- | ---: | ---: | ---: | ---: | --- |"]
@@ -115,14 +142,16 @@ def compact_markdown(result, metadata):
     for workload, label in zip(WORKLOADS, LABELS, strict=True):
         metrics = [rows[workload[0], backend]["metrics"]["roundtrips_per_second"] for backend in BACKENDS]
         weave, tokio, asio = metrics
-        noisy = any(rows[workload[0], backend]["noisy"] for backend in BACKENDS) or any(
-            pair["noisy"] for pair in result["paired"] if pair["workload"] == workload[0])
-        notes = "noisy" if noisy else "within thresholds"
-        if any(rows[workload[0], backend]["client_busy"] for backend in BACKENDS):
-            notes += "; client busy"
+        case_rows = [rows[workload[0], backend] for backend in BACKENDS]
+        case_pairs = [pair for pair in result["paired"] if pair["workload"] == workload[0]]
+        notes = quality_notes(case_rows, case_pairs)
         lines.append(f"| {label} | {weave['median']:,.0f} | {asio['median']:,.0f} | {tokio['median']:,.0f} | "
                      f"{max(metric['cv_pct'] for metric in metrics):.1f}% | {notes} |")
-    lines.extend(["", status, "", "CPU use, p99/p99.9 latency, paired confidence intervals, and limitations: "
+    lines.extend(["", precision_summary(result)])
+    if any(row["client_busy"] for row in result["rows"]):
+        lines.extend(["", "Client busy: at least one backend's load generator used >=90% of its core budget. "
+                      "These are end-to-end loopback results, not maximum server capacity."])
+    lines.extend(["", "CPU use, p99/p99.9 latency, paired confidence intervals, and limitations: "
                   "[benchmark protocol](docs/ci-benchmarks.md)."])
     return "\n".join(lines) + "\n"
 
@@ -136,9 +165,7 @@ def full_markdown(result, metadata):
     for row in result["rows"]:
         metrics = row["metrics"]
         value = lambda key: metrics[key]["median"]
-        quality = "noisy" if row["noisy"] else "within thresholds"
-        if row["client_busy"]:
-            quality += "; client busy"
+        quality = quality_notes([row])
         lines.append(f"| {row['workload']} | {row['backend']} | {value('roundtrips_per_second'):,.0f} | "
                      f"{value('p99_us') / 1000:.3f} | {value('p999_us') / 1000:.3f} | "
                      f"{value('server_cpu_us_per_op'):.2f} | {value('server_cycles_per_op') / 1000:.2f} | "
@@ -230,7 +257,7 @@ def benchmark(args):
         with Path(summary_path).open("a", encoding="utf-8") as output:
             output.write(markdown)
     if result["noisy"]:
-        print("::warning::Benchmark completed, but variability exceeds the stated precision thresholds. No win/regression verdict.")
+        print(f"::warning::Benchmark completed. {precision_summary(result).replace('**', '')}")
     print(f"Evidence: {args.output_directory}")
 
 

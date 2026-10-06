@@ -73,12 +73,14 @@ or linking a runtime target. Only core is header-only; the other targets are
 static libraries for now. Shared-library ABI/export support is not implemented.
 No library-only configure fetches test or comparison dependencies.
 
-The `package_components` CTest builds each selected component alone, installs
-and relocates it, compiles every installed header independently, and runs an
-external consumer linked only to that component. It rejects unexpected targets,
+The `package_components_<module>` CTests build each selected component alone,
+install and relocate it, compile every installed header independently, and run an
+external consumer linked only to that component. They reject unexpected targets,
 dependencies, native headers in public headers, and missing required components.
 The TCP consumer performs a loopback exchange without the runtime. Runtime
 consumers exercise both schedulers without TCP.
+The combined `package_components_all` case checks a multi-component install.
+Each case has its own timeout rather than sharing one cold-build time budget.
 
 ### Namespace visibility
 

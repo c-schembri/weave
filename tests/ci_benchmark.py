@@ -22,6 +22,7 @@ def evidence():
                 "duration_ms": bench_ci.DURATION_MS, "warmup_ms": bench_ci.WARMUP_MS, "seed": bench_ci.SEED,
                 "cpu_masks": {"server": 5, "client": 10}, "workers": 2, "client_workers": 2,
                 "revision": "a" * 40, "worktree": [], "timestamp": "2026-10-06T12:00:00+11:00",
+                "cpu": [{"Name": "Synthetic CPU", "NumberOfCores": 4, "NumberOfLogicalProcessors": 8}],
                 "repository": "c-schembri/weave", "run_id": "123", "elapsed_seconds": 115.0}
     samples = []
     for repetition, workload, backend in bench_ci.schedule():
@@ -68,6 +69,8 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(len(result["rows"]), 12)
         self.assertEqual(len(result["paired"]), 8)
         self.assertFalse(result["noisy"])
+        self.assertFalse(result["throughput_noisy"])
+        self.assertFalse(result["p99_noisy"])
         for pair in result["paired"]:
             self.assertAlmostEqual(pair["ratio"], 1.2)
             self.assertEqual(pair["ci90"], [pair["ratio"], pair["ratio"]])
@@ -77,12 +80,16 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("p99.9 ms", markdown)
         self.assertIn("300s", markdown)
         self.assertIn("actions/runs/123", markdown)
+        self.assertIn("Synthetic CPU", markdown)
+        self.assertIn("server/client workers: 2/2", markdown)
 
     def test_noisy_measurements_are_retained_not_filtered(self):
         samples, metadata = evidence()
         samples[0].update(samples=200000, roundtrips_per_second=200000 / 1.01)
         result = bench_ci.report(samples, metadata)
         self.assertTrue(result["noisy"])
+        self.assertTrue(result["throughput_noisy"])
+        self.assertFalse(result["p99_noisy"])
         first = next(row for row in result["rows"] if row["backend"] == "weave" and row["workload"] == "64-small")
         self.assertEqual(first["metrics"]["roundtrips_per_second"]["max"], 200000 / 1.01)
         self.assertIn("inconclusive", bench_ci.compact_markdown(result, metadata))
@@ -94,8 +101,16 @@ class ProtocolTests(unittest.TestCase):
             sample["client_cores"] = 1.95
         result = bench_ci.report(samples, metadata)
         self.assertTrue(result["noisy"])
+        self.assertFalse(result["throughput_noisy"])
+        self.assertTrue(result["p99_noisy"])
         self.assertTrue(all(row["client_busy"] for row in result["rows"]))
-        self.assertIn("client busy", bench_ci.compact_markdown(result, metadata))
+        compact = bench_ci.compact_markdown(result, metadata)
+        self.assertIn("client busy", compact)
+        self.assertIn("Throughput variation is within limits.", compact)
+        self.assertIn("1 library/workload p99 measurement is noisy", compact)
+        self.assertIn("not maximum server capacity", compact)
+        self.assertNotIn("Noisy throughput", compact)
+        self.assertIn("p99 noisy; client busy", bench_ci.full_markdown(result, metadata))
 
     def test_partial_duplicates_parameter_changes_and_stalled_windows_fail(self):
         samples, metadata = evidence()
