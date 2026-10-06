@@ -211,12 +211,15 @@ def compact_markdown(result, metadata, evidence_url, workload=WORKLOADS[0][0], c
                       "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"]
         lines[2:2] = [f"Before: [`{before_source[:7]}`](https://github.com/c-schembri/weave/commit/{before_source}); "
                       "the archived before binary is replayed within every matched repetition block.", ""]
+        lines[-2:-2] = ["Paired change is the median of within-repetition ratios, not the ratio of the displayed medians.", ""]
     if not result["timing_valid"]:
         warning = (f"**Diagnostic run: timing validation failed in {len(result['window_failures'])} measurement window(s).** "
                    "All samples are retained. This is not a passed benchmark run; affected cohorts are non-comparable.")
         lines[0:0] = [warning, ""]
     if candidate == "weave-shared":
-        lines[0:0] = ["**Shared IOCP candidate; not the default layout.**", ""]
+        lines[0:0] = ["**Shared IOCP candidate; not the default layout.** "
+                      "Before uses sharded IOCP: this measures the combined layout/runtime change, "
+                      "not the fast path in isolation.", ""]
     for count in metadata["requested_cores"]:
         if str(count) not in metadata["cpu_masks"]:
             empty = " | N/A" * (6 if "before" in metadata else 5)

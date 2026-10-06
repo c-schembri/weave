@@ -120,6 +120,8 @@ clean-source `environment.json`; the collector verifies that the executable hash
 matches that archived evidence. The before binary is rerun inside every matched
 block, not compared with a previous day's numbers. `--shared-candidate` separately
 measures the existing optional shared IOCP layout; the default remains sharded.
+The archived before backend uses sharded IOCP: shared-candidate comparisons
+measure the combined layout/runtime change, not an isolated fast-path improvement.
 
 ```sh
 python scripts/bench_scaling.py run --before-binary build/runtime-before/Release/weave_runtime_server.exe --before-evidence benchmarks/results/scaling-TIMESTAMP/environment.json --shared-candidate --timeout-seconds 2700

@@ -23,6 +23,41 @@ Sharded IOCP retains queue-based completions. Resuming directly on one sharded
 collector can concentrate work on that port rather than spread it across workers.
 The shared layout is still opt-in; benchmarks must justify any default change.
 
+## Measured Outcome
+
+The [2026-10-06 comparison](https://github.com/c-schembri/weave/releases/tag/benchmarks-20261006-182604)
+completed all 560 windows and passed timing validation. It replayed the archived
+before executable in every repetition, alongside the new default, shared IOCP,
+Asio and Tokio. Debug, Release and AddressSanitizer each passed 22 CTests.
+
+Default-layout throughput changes were mostly within measurement uncertainty.
+This iteration does **not** establish a substantial general speedup. For 1,024
+clients exchanging 1 KiB, the paired changes were -0.5%, -0.4%, -0.2% and +0.5%
+at 1/2/4/8 server cores. At eight cores, paired server cycles/RTT fell 1.9%, but
+the 90% interval includes no change. The paired p99.9 reduction was 7.9%
+with an exploratory 90% interval of 0.7%-30.0%; this is not a universal tail win.
+At four cores, p99/p99.9 instead rose 2.5%/2.7%, with intervals including no change.
+
+Shared IOCP versus the **old sharded default** produced the following results for
+the same workload. This combines a layout change and runtime changes; it does
+not isolate the native-completion fast path from the previous shared implementation.
+
+| Server cores | Throughput change | Server cycles/RTT change | p99 change | p99.9 change |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | +0.3% | -0.3% | +0.2% | -0.8% |
+| 2 | +5.1% | -2.3% | -4.4% | -6.5% |
+| 4 | +12.3% | -4.4% | -8.8% | -8.7% |
+| 8 | -18.2% | -14.4% | +20.1% | +13.1% |
+
+These are medians of matched repetition ratios, not ratios of aggregate medians.
+Throughput variability for this workload was at most 1.2% CV. Four/eight-core
+comparisons hit client limits, and the eight-core shared candidate trades lower
+CPU cost for worse throughput and tails. It is **not promoted to the default**.
+The full evidence includes all four workloads, all samples, absolute CPU/tail
+measurements, variability and confidence intervals, including unfavourable results.
+It does not show Weave consistently beating Asio and Tokio. A separate client
+machine and matched offered-load latency tests remain necessary for capacity claims.
+
 ## Diagnose A Stall
 
 Use Windows Performance Recorder's CPU/wait profiles when the process has the

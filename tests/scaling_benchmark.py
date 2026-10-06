@@ -65,9 +65,13 @@ class ScalingTests(unittest.TestCase):
         text = bench_scaling.compact_markdown(result, metadata, "https://example.test/evidence")
         self.assertIn("Weave before | Weave after | Paired change", text)
         self.assertIn("+20.0%", text)
+        table = [line for line in text.splitlines() if line.startswith("|")]
+        self.assertEqual(len(table), 8)
+        self.assertIn("\n".join(table), text)
         shared = bench_scaling.compact_markdown(result, metadata, "https://example.test/evidence", candidate="weave-shared")
         self.assertIn("+140.0%", shared)
         self.assertIn("not the default", shared)
+        self.assertIn("not the fast path in isolation", shared)
         self.assertIn("weave-shared", bench_scaling.full_markdown(result, metadata, "https://example.test/evidence"))
         self.assertEqual(len(list(bench_scaling.schedule([1, 2, 4, 8], WORKLOADS, 7, 60106, bench_scaling.backends(metadata)))), 560)
         with self.assertRaises(ValueError):
