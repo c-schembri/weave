@@ -77,7 +77,7 @@ def compiler_versions(build):
 
 def timing_build(build):
     cache = (build / "CMakeCache.txt").read_text(encoding="utf-8")
-    for flag in ("WEAVE_ENABLE_ASAN", "WEAVE_PROFILE_RUNTIME"):
+    for flag in ("WEAVE_ENABLE_ASAN", "WEAVE_PROFILE_RUNTIME", "WEAVE_TRACE_RUNTIME"):
         require(not re.search(rf"^{flag}:BOOL=ON$", cache, re.MULTILINE), f"Timing requires {flag}=OFF.")
 
 

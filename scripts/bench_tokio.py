@@ -102,7 +102,9 @@ def measure(args, backend, workload, repetition, masks):
     prefix = args.output_directory / f"{name}-{repetition:02d}-{backend}"
     workers = getattr(args, "server_workers", 4)
     common = [size, work, int(uneven), masks["server"], workers]
-    server_command = [args.tokio_binary, *common] if backend == "tokio" else [args.server_binary, backend, *common]
+    server_binary = args.before_binary if backend == "weave-before" else args.server_binary
+    server_backend = "weave" if backend == "weave-before" else backend
+    server_command = [args.tokio_binary, *common] if backend == "tokio" else [server_binary, server_backend, *common]
     server = client = None
     phase = "server startup"
     try:
@@ -125,6 +127,7 @@ def measure(args, backend, workload, repetition, masks):
         sample = json.loads(client.line())
         cpu = after["cpu_seconds"] - before["cpu_seconds"]
         sample.update({"backend": backend, "workload": name, "repetition": repetition,
+                       "server_pid": server.process.pid, "client_pid": client.process.pid,
                        "connections": connections, "bytes": size, "cpu_iterations": work, "uneven": uneven,
                        "server_workers": workers,
                        "server_cores": cpu / sample["wall_seconds"],

@@ -30,6 +30,8 @@ struct TaskObserver {
 // IO routes a continuation without knowing the scheduler or owning the root task.
 struct Executor {
   void (*schedule)(Posted &) noexcept = nullptr;
+  // Optional native-completion fast path; submission and cleanup always use schedule.
+  void (*dispatch_completion)(Posted &) noexcept = nullptr;
 };
 
 inline thread_local Context *current_context = nullptr;

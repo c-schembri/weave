@@ -16,6 +16,8 @@ struct ScheduledSpawn : SpawnBase, Executor {
   bool pinned = false;
   bool scheduler_done = false;
   std::size_t worker = 0;
+  ScheduledSpawn *queue_next = nullptr;
+  ScheduledSpawn *queue_previous = nullptr;
 };
 
 struct SubmissionScope {

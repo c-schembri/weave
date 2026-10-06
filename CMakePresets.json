@@ -36,7 +36,8 @@
         "WEAVE_BUILD_BENCHMARKS": "ON",
         "WEAVE_BENCHMARK_SUITE": "runtime",
         "WEAVE_ENABLE_ASAN": "OFF",
-        "WEAVE_PROFILE_RUNTIME": "OFF"
+        "WEAVE_PROFILE_RUNTIME": "OFF",
+        "WEAVE_TRACE_RUNTIME": "OFF"
       }
     },
     {

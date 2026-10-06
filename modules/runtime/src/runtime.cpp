@@ -1,7 +1,8 @@
 #include <weave/runtime.hpp>
+#include <weave/io/detail/trace.hpp>
 #include <algorithm>
 #include <mutex>
-#include <deque>
+#include <array>
 #include <thread>
 #include <vector>
 
@@ -10,20 +11,66 @@ namespace weave {
 namespace {
 
 thread_local detail::RuntimeTask *current_task = nullptr;
+thread_local void *current_scheduler = nullptr;
+thread_local std::size_t current_worker = 0;
 
 } // namespace
 
 struct Runtime::Impl {
-  struct Worker {
+  struct ReadyQueue {
+    detail::RuntimeTask *first = nullptr;
+    detail::RuntimeTask *last = nullptr;
+    std::size_t size = 0;
+
+    bool empty() const noexcept
+    {
+      return first == nullptr;
+    }
+
+    void push_back(detail::RuntimeTask &task) noexcept
+    {
+      task.queue_next = nullptr;
+      task.queue_previous = last;
+      if (last)
+        last->queue_next = &task;
+      else
+        first = &task;
+      last = &task;
+      ++size;
+    }
+
+    detail::RuntimeTask *pop(bool back = false) noexcept
+    {
+      auto *task = back ? last : first;
+      if (!task)
+        return nullptr;
+      if (task->queue_previous)
+        task->queue_previous->queue_next = task->queue_next;
+      else
+        first = task->queue_next;
+      if (task->queue_next)
+        task->queue_next->queue_previous = task->queue_previous;
+      else
+        last = task->queue_previous;
+      task->queue_next = nullptr;
+      task->queue_previous = nullptr;
+      --size;
+      return task;
+    }
+  };
+
+  struct alignas(64) Worker {
     std::thread thread;
     Context *context = nullptr;
     Error error;
     std::atomic<bool> ready{false};
     std::atomic<bool> idle{false};
+    std::atomic<bool> dispatching{false};
     std::mutex queue_mutex;
-    std::deque<detail::RuntimeTask *> movable;
-    std::deque<detail::RuntimeTask *> pinned;
+    ReadyQueue movable;
+    ReadyQueue pinned;
     bool pinned_turn = true;
+    std::size_t next_victim = 0;
   };
 
   std::vector<std::unique_ptr<Worker>> workers;
@@ -41,7 +88,13 @@ struct Runtime::Impl {
 
   bool drained() const noexcept
   {
-    return active.load(std::memory_order_acquire) == 0 && dispatching.load(std::memory_order_acquire) == 0;
+    if (active.load(std::memory_order_acquire) != 0 || dispatching.load(std::memory_order_acquire) != 0)
+      return false;
+    for (const auto &worker : workers) {
+      if (worker->dispatching.load(std::memory_order_acquire))
+        return false;
+    }
+    return true;
   }
 
   void enqueue(detail::RuntimeTask &task)
@@ -49,23 +102,29 @@ struct Runtime::Impl {
     const auto index = task.worker;
     const bool pinned = task.pinned;
     auto &worker = *workers[index];
+    detail::trace(detail::TraceEvent::enqueue, &task, index);
 
     {
       std::lock_guard lock(worker.queue_mutex);
-      (pinned ? worker.pinned : worker.movable).push_back(&task);
+      (pinned ? worker.pinned : worker.movable).push_back(task);
     }
 
     // Marking idle before rechecking queues closes the enqueue/park lost-wake race.
-    if (worker.idle.exchange(false, std::memory_order_acq_rel))
+    const bool waking_owner = worker.idle.exchange(false, std::memory_order_acq_rel);
+    if (waking_owner)
       detail::ContextAccess::wake(*worker.context);
 
-    if (!pinned) {
-      for (std::size_t n = 1; n < workers.size(); ++n) {
-        auto &thief = *workers[(index + n) % workers.size()];
-        if (thief.idle.exchange(false, std::memory_order_acq_rel)) {
-          detail::ContextAccess::wake(*thief.context);
-          break;
-        }
+    if (!pinned && !waking_owner)
+      wake_thief(index);
+  }
+
+  void wake_thief(std::size_t index) noexcept
+  {
+    for (std::size_t n = 1; n < workers.size(); ++n) {
+      auto &thief = *workers[(index + n) % workers.size()];
+      if (thief.idle.load(std::memory_order_relaxed) && thief.idle.exchange(false, std::memory_order_acq_rel)) {
+        detail::ContextAccess::wake(*thief.context);
+        break;
       }
     }
   }
@@ -79,21 +138,39 @@ struct Runtime::Impl {
       auto &queue = prefer_pinned ? worker.pinned : worker.movable;
 
       if (!queue.empty()) {
-        auto *task = queue.front();
-        queue.pop_front();
+        auto *task = queue.pop();
         worker.pinned_turn = !worker.pinned_turn;
         return task;
       }
     }
 
-    for (std::size_t n = 1; n < workers.size(); ++n) {
-      auto &victim = *workers[(index + n) % workers.size()];
-      std::lock_guard lock(victim.queue_mutex);
-      if (!victim.movable.empty()) {
-        auto *task = victim.movable.back();
-        victim.movable.pop_back();
-        return task;
+    const auto start = worker.next_victim++ % workers.size();
+    for (std::size_t n = 0; n < workers.size(); ++n) {
+      const auto victim_index = (start + n) % workers.size();
+      if (victim_index == index)
+        continue;
+      auto &victim = *workers[victim_index];
+      std::array<detail::RuntimeTask *, 16> stolen{};
+      std::size_t count = 0;
+      {
+        std::lock_guard lock(victim.queue_mutex);
+        if (victim.movable.empty())
+          continue;
+        count = (std::min)(stolen.size(), (victim.movable.size + 1) / 2);
+        for (std::size_t i = 0; i < count; ++i)
+          stolen[i] = victim.movable.pop(true);
       }
+      // Never hold a victim and destination queue lock together.
+      if (count > 1) {
+        {
+          std::lock_guard lock(worker.queue_mutex);
+          for (std::size_t i = 1; i < count; ++i)
+            worker.movable.push_back(*stolen[i]);
+        }
+        wake_thief(index);
+      }
+      detail::trace(detail::TraceEvent::steal, stolen[0], count);
+      return stolen[0];
     }
 
     return nullptr;
@@ -101,7 +178,8 @@ struct Runtime::Impl {
 
   void execute(detail::RuntimeTask &task, std::size_t worker)
   {
-    dispatching.fetch_add(1, std::memory_order_acq_rel);
+    auto &execution = *workers[worker];
+    execution.dispatching.store(true, std::memory_order_release);
     task.retain(&task);
 
     detail::Posted *event;
@@ -116,6 +194,7 @@ struct Runtime::Impl {
     }
 
     auto *runtime = static_cast<Runtime *>(task.owner);
+    detail::trace(detail::TraceEvent::execute_begin, &task, reinterpret_cast<std::uintptr_t>(event->state));
     current_task = &task;
     detail::current_executor = &task;
     const auto invoke = event->invoke;
@@ -123,6 +202,7 @@ struct Runtime::Impl {
     invoke(state);
     detail::current_executor = nullptr;
     current_task = nullptr;
+    detail::trace(detail::TraceEvent::execute_end, &task);
 
     bool again;
     const bool done = task.scheduler_done;
@@ -141,7 +221,11 @@ struct Runtime::Impl {
       runtime->finished();
 
     // A requeued continuation can finish on another worker before this dispatch unwinds.
-    dispatch_finished();
+    execution.dispatching.store(false, std::memory_order_release);
+    if (closing.load(std::memory_order_acquire) && active.load(std::memory_order_acquire) == 0) {
+      std::lock_guard lock(submissions);
+      wake_locked();
+    }
   }
 
   void dispatch_finished() noexcept
@@ -219,6 +303,8 @@ struct Runtime::Impl {
         [](void *state) noexcept { static_cast<Impl *>(state)->active.fetch_add(1, std::memory_order_relaxed); },
         [](void *state) noexcept { static_cast<Impl *>(state)->finished(); }});
     detail::ContextAccess::enter(*ctx, scheduler == Scheduler::work_stealing ? this : nullptr);
+    current_scheduler = this;
+    current_worker = index;
     const detail::SubmissionScope submission{
       this,
       index,
@@ -265,7 +351,9 @@ struct Runtime::Impl {
         worker.idle.store(false, std::memory_order_release);
         execute(*task, index);
       } else if (!(closing.load(std::memory_order_acquire) && drained())) {
+        detail::trace(detail::TraceEvent::park_begin, &worker, index);
         detail::ContextAccess::poll(*ctx);
+        detail::trace(detail::TraceEvent::park_end, &worker, index);
       }
       worker.idle.store(false, std::memory_order_release);
     }
@@ -275,6 +363,7 @@ struct Runtime::Impl {
       worker.context = nullptr;
     }
     detail::ContextAccess::leave(*ctx);
+    current_scheduler = nullptr;
   }
 };
 
@@ -380,8 +469,10 @@ Result<void> Runtime::submit(detail::RuntimeTask &task, std::size_t worker, std:
   task.on_finish = complete;
   task.schedule = detail::schedule;
   task.worker = worker;
-  if (impl_->scheduler == Scheduler::work_stealing)
+  if (impl_->scheduler == Scheduler::work_stealing) {
     task.event.executor = &task;
+    task.dispatch_completion = detail::dispatch_completion;
+  }
 
   impl_->active.fetch_add(1, std::memory_order_relaxed);
   detail::ContextAccess::post(*task.context, task.event);
@@ -403,6 +494,28 @@ void detail::schedule(Posted &message) noexcept
     task.scheduled = true;
     static_cast<Runtime *>(task.owner)->impl_->enqueue(task);
   }
+}
+
+void detail::dispatch_completion(Posted &message) noexcept
+{
+  auto &task = *static_cast<RuntimeTask *>(message.executor);
+  auto *runtime = static_cast<Runtime *>(task.owner);
+  const bool shared = runtime->impl_->io_layout == IoLayout::shared;
+  if (shared && current_scheduler == runtime->impl_.get() && !current_task && !current_executor) {
+    std::unique_lock lock(task.ready_mutex);
+    if (!task.scheduled && (!task.pinned || task.worker == current_worker)) {
+      // Only native completions take this path. Submission and frame cleanup stay deferred.
+      require(task.first == nullptr && task.last == nullptr);
+      task.scheduled = true;
+      message.next = nullptr;
+      task.first = task.last = &message;
+      lock.unlock();
+      trace(TraceEvent::local_completion, &task, current_worker);
+      runtime->impl_->execute(task, current_worker);
+      return;
+    }
+  }
+  schedule(message);
 }
 
 void Runtime::finished() noexcept

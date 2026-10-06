@@ -2,6 +2,7 @@
 #include <weave/io/detail/context_access.hpp>
 #include <algorithm>
 #include <mutex>
+#include <weave/io/detail/trace.hpp>
 #include <type_traits>
 #if defined(WEAVE_PROFILE_RUNTIME)
 #include <chrono>
@@ -332,6 +333,7 @@ CancelToken detail::context_cancellation(Context &context) noexcept
 
 void detail::ContextAccess::wake(Context &context) noexcept
 {
+  trace(TraceEvent::wake, &context);
   if (context.impl_->domain_) {
     // Alertable IOCP waits allow a targeted wake without a polling timeout or a second driver thread.
     auto queued = QueueUserAPC([](ULONG_PTR) {}, context.impl_->thread_, 0);
@@ -533,6 +535,7 @@ void Context::poll(bool wait)
 #if defined(WEAVE_PROFILE_RUNTIME)
   const auto dequeue_start = std::chrono::steady_clock::now();
 #endif
+  detail::trace(detail::TraceEvent::io_wait_begin, this, wait && !dispatched);
   auto dequeued = GetQueuedCompletionStatusEx(
     impl_->port_,
     impl_->completions_.data(),
@@ -540,6 +543,7 @@ void Context::poll(bool wait)
     &count,
     wait && !dispatched ? detail::IoAccess::timers(*this).wait_time() : 0,
     impl_->domain_ ? TRUE : FALSE);
+  detail::trace(detail::TraceEvent::io_wait_end, this, count);
   if (!dequeued) {
     const auto error = GetLastError();
     if (error == WAIT_TIMEOUT || (impl_->domain_ && error == WAIT_IO_COMPLETION))
@@ -579,12 +583,18 @@ void Context::poll(bool wait)
     op->transferred = entry.dwNumberOfBytesTransferred;
     op->failed = entry.Internal != 0;
     auto &owner = *op->context;
+    detail::trace(
+      detail::TraceEvent::io_complete,
+      op->event.state,
+      reinterpret_cast<std::uintptr_t>(op->event.executor));
     owner.count(owner.impl_->metrics_.completed);
 
     // Resumption may destroy this operation. Do not touch op afterward.
-    if (op->event.executor)
-      op->event.executor->schedule(op->event);
-    else if (&owner == this)
+    if (op->event.executor) {
+      const auto executor = op->event.executor;
+      const auto dispatch = executor->dispatch_completion ? executor->dispatch_completion : executor->schedule;
+      dispatch(op->event);
+    } else if (&owner == this)
       op->event.invoke(op->event.state);
     else
       owner.post(op->event);

@@ -111,7 +111,7 @@ class AutomationTests(unittest.TestCase):
             self.assertEqual(run.call_count, 1)
 
     def test_instrumented_builds_rejected_and_cache_files_not_hashed(self):
-        for flag in ("WEAVE_ENABLE_ASAN", "WEAVE_PROFILE_RUNTIME"):
+        for flag in ("WEAVE_ENABLE_ASAN", "WEAVE_PROFILE_RUNTIME", "WEAVE_TRACE_RUNTIME"):
             (self.root / "CMakeCache.txt").write_text(f"{flag}:BOOL=ON\n")
             with self.assertRaisesRegex(ValueError, flag):
                 timing_build(self.root)

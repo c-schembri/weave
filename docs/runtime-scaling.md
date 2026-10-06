@@ -112,3 +112,27 @@ raw samples. Upload the ZIP as a benchmark-only GitHub prerelease asset, not a
 library release or tracked JSON/log directory. Link it from the curated README
 table with the measured revision, timestamp, hardware and sampling windows.
 Publishing never triggers fresh measurements or blocks correctness CI.
+
+## Optimization Comparisons
+
+Preserve the original server executable before rebuilding. Supply its original
+clean-source `environment.json`; the collector verifies that the executable hash
+matches that archived evidence. The before binary is rerun inside every matched
+block, not compared with a previous day's numbers. `--shared-candidate` separately
+measures the existing optional shared IOCP layout; the default remains sharded.
+
+```sh
+python scripts/bench_scaling.py run --before-binary build/runtime-before/Release/weave_runtime_server.exe --before-evidence benchmarks/results/scaling-TIMESTAMP/environment.json --shared-candidate --timeout-seconds 2700
+```
+
+This five-backend 1/2/4/8-core matrix has 560 two-second windows, or 18.7 minutes
+of timed work plus setup/cleanup. Every case uses the same four physical client
+cores. The raw report includes both candidates' matched comparisons against the
+before binary, Asio and Tokio, and every observed outlier. Neither additional
+backend changes the baseline library configuration or payload/validation work.
+
+For stall diagnosis, use [execution tracing](runtime-performance.md). Traces and
+profile builds are never accepted as timing evidence. On this 12-core machine,
+client saturation still limits peak-capacity conclusions; a separate load-generator
+machine is required before claiming maximum server scaling. No such remote
+capacity or matched-offered-load measurement has been performed by this protocol.

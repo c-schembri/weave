@@ -16,6 +16,7 @@ namespace detail {
 using RuntimeTask = ScheduledSpawn;
 
 void schedule(Posted &message) noexcept;
+void dispatch_completion(Posted &message) noexcept;
 
 } // namespace detail
 
@@ -96,6 +97,7 @@ public:
 
 private:
   friend void detail::schedule(detail::Posted &) noexcept;
+  friend void detail::dispatch_completion(detail::Posted &) noexcept;
   std::unique_ptr<Impl> impl_;
   Result<void> submit(
     detail::RuntimeTask &task,

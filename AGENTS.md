@@ -52,6 +52,14 @@
   owner's queue. Never execute an affine continuation on an arbitrary collector.
   Targeted APC wakes only interrupt alertable waits; they never resume user code.
   Do not add polling timeouts, helper threads, or shared_ptr ownership per operation.
+  Shared-port native completions may dispatch an idle movable root directly on
+  a collector in the same runtime. Keep pinned roots on their worker, serialize
+  each root, bound dispatch by the existing IO batch/fairness budgets, and defer
+  submission and frame cleanup. Sharded completions remain queue-routed. Batch
+  steals publish their remaining work before waking an idle thief; never hold
+  two worker queue locks together or skip a busy queue lock before parking.
+  Per-worker dispatch guards and shared-collector accounting must both drain
+  before any worker Context is destroyed.
 - Context::run(task) does not join independently spawned tasks. Join their handles
   before borrowed data dies, or make each task own its data. shutdown() and Context
   destruction cooperatively cancel and drain owned tasks; never free active frames.

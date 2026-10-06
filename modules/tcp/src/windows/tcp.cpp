@@ -3,6 +3,7 @@
 #include "windows/iocp.hpp"
 #include "windows/address.hpp"
 #include <weave/resolve.hpp>
+#include <weave/io/detail/trace.hpp>
 #include <mswsock.h>
 #include <ws2tcpip.h>
 #include <algorithm>
@@ -149,6 +150,7 @@ struct TcpIoAwaiter {
 #if defined(WEAVE_PROFILE_RUNTIME)
     const auto submission_start = std::chrono::steady_clock::now();
 #endif
+    detail::trace(detail::TraceEvent::io_submit_begin, continuation.address(), kind);
     switch (kind) {
     case receive:
 #if defined(WEAVE_PROFILE_RUNTIME)
@@ -183,6 +185,7 @@ struct TcpIoAwaiter {
     }
 
     const auto error = result != 0 ? WSAGetLastError() : 0;
+    detail::trace(detail::TraceEvent::io_submit_end, continuation.address(), error);
 #if defined(WEAVE_PROFILE_RUNTIME)
     const auto submission_time = std::chrono::steady_clock::now() - submission_start;
     const auto submission_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(submission_time).count();

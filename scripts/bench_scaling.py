@@ -50,16 +50,32 @@ def plan(load_binary, counts, client_cores):
     return {"cpu_masks": masks, "unavailable": unavailable, "available_physical_cores": available}
 
 
-def schedule(counts, workloads, repetitions, seed):
+def schedule(counts, workloads, repetitions, seed, backends=BACKENDS):
     randomizer = random.Random(seed)
     for repetition in range(repetitions):
         cases = [(count, workload) for count in counts for workload in workloads]
         randomizer.shuffle(cases)
         for count, workload in cases:
-            backends = list(BACKENDS)
-            randomizer.shuffle(backends)
-            for backend in backends:
+            order = list(backends)
+            randomizer.shuffle(order)
+            for backend in order:
                 yield repetition, count, workload, backend
+
+
+def backends(metadata):
+    libraries = list(BACKENDS)
+    if "before" in metadata:
+        before = metadata["before"]
+        require(re.fullmatch(r"[0-9a-f]{40}", before["revision"]) is not None and before["worktree"] == [] and
+                re.fullmatch(r"[0-9A-F]{64}", before["binary"]["Hash"]) is not None and
+                re.fullmatch(r"[0-9A-F]{64}", before["evidence"]["Hash"]) is not None,
+                "Invalid before-binary provenance.")
+        libraries.append("weave-before")
+    shared = metadata.get("shared_candidate", False)
+    require(type(shared) is bool, "Invalid shared-IOCP candidate flag.")
+    if shared:
+        libraries.append("weave-shared")
+    return tuple(libraries)
 
 
 def report(samples, metadata, *, diagnostic=False):
@@ -79,6 +95,7 @@ def report(samples, metadata, *, diagnostic=False):
     require(type(client_cores) is int and 1 <= client_cores <= 32 and metadata["client_workers"] == client_cores,
             "Invalid client budget.")
     client_mask = masks["1"]["client"]
+    libraries = backends(metadata)
     for count, partition in masks.items():
         require(set(partition) == {"server", "client"} and
                 all(type(value) is int and 0 < value < 2**64 for value in partition.values()), "Invalid CPU masks.")
@@ -99,7 +116,7 @@ def report(samples, metadata, *, diagnostic=False):
     repetitions = metadata["repetitions"]
     for count in sorted(map(int, masks)):
         group = [sample for sample in samples if sample["server_workers"] == count]
-        result = analyze(group, WORKLOADS, BACKENDS, repetitions)
+        result = analyze(group, WORKLOADS, libraries, repetitions)
         for row in result["rows"]:
             if "throughput_ratio_ci90" in row:
                 row["throughput_ratio_ci90"] = list(row["throughput_ratio_ci90"])
@@ -120,20 +137,36 @@ def report(samples, metadata, *, diagnostic=False):
                        throughput_noisy=row["metrics"]["roundtrips_per_second"]["cv_pct"] > 10 or (high - low) / speedup > 0.20,
                        p99_noisy=row["metrics"]["p99_us"]["cv_pct"] > 25,
                        client_busy=row["metrics"]["client_cores"]["median"] >= client_cores * 0.90)
+            if "before" in metadata or metadata.get("shared_candidate"):
+                row["p999_noisy"] = row["metrics"]["p999_us"]["cv_pct"] > 25
+                row["cycles_noisy"] = row["metrics"]["server_cycles_per_op"]["cv_pct"] > 10
             rows.append(row)
         for workload in WORKLOADS:
-            for baseline in ("asio", "tokio"):
-                groups = {backend: {sample["repetition"]: sample for sample in group
-                                   if sample["workload"] == workload[0] and sample["backend"] == backend}
-                          for backend in ("weave", baseline)}
-                ratios = [groups["weave"][index]["roundtrips_per_second"] /
-                          groups[baseline][index]["roundtrips_per_second"] for index in range(repetitions)]
-                comparisons.append({"server_workers": count, "workload": workload[0], "baseline": baseline,
-                                    "ratio": median(ratios), "ci90": list(interval(ratios)),
-                                    "timing_valid": not any(failure["server_workers"] == count and
-                                                            failure["workload"] == workload[0] and
-                                                            failure["backend"] in ("weave", baseline)
-                                                            for failure in failures)})
+            baselines = ("asio", "tokio", "weave-before") if "before" in metadata else ("asio", "tokio")
+            candidates = ("weave", "weave-shared") if metadata.get("shared_candidate") else ("weave",)
+            for candidate in candidates:
+                for baseline in baselines:
+                    groups = {backend: {sample["repetition"]: sample for sample in group
+                                       if sample["workload"] == workload[0] and sample["backend"] == backend}
+                              for backend in (candidate, baseline)}
+                    ratios = [groups[candidate][index]["roundtrips_per_second"] /
+                              groups[baseline][index]["roundtrips_per_second"] for index in range(repetitions)]
+                    pair = {"server_workers": count, "workload": workload[0], "baseline": baseline,
+                            "ratio": median(ratios), "ci90": list(interval(ratios)),
+                            "timing_valid": not any(failure["server_workers"] == count and
+                                                    failure["workload"] == workload[0] and
+                                                    failure["backend"] in (candidate, baseline)
+                                                    for failure in failures)}
+                    if metadata.get("shared_candidate"):
+                        pair["candidate"] = candidate
+                    if "before" in metadata or metadata.get("shared_candidate"):
+                        pair["cost_and_tail"] = {}
+                        for metric in ("server_cycles_per_op", "p99_us", "p999_us"):
+                            values = [groups[candidate][index][metric] / groups[baseline][index][metric]
+                                      for index in range(repetitions) if groups[baseline][index][metric] > 0]
+                            pair["cost_and_tail"][metric] = ({"ratio": median(values), "ci90": list(interval(values))}
+                                                            if len(values) == repetitions else None)
+                    comparisons.append(pair)
     return {"protocol": PROTOCOL, "timing_valid": not failures, "window_failures": failures,
             "rows": rows, "comparisons": comparisons}
 
@@ -146,14 +179,18 @@ def quality(rows):
         notes.append("throughput noisy")
     if any(row["p99_noisy"] for row in rows):
         notes.append("p99 noisy")
+    if any(row.get("p999_noisy", False) for row in rows):
+        notes.append("p99.9 noisy")
+    if any(row.get("cycles_noisy", False) for row in rows):
+        notes.append("cycles noisy")
     if any(row["client_busy"] for row in rows):
-        names = {"weave": "Weave", "asio": "Asio", "tokio": "Tokio"}
+        names = {"weave": "Weave", "asio": "Asio", "tokio": "Tokio", "weave-before": "Weave before", "weave-shared": "Weave shared"}
         clients = ", ".join(names[row["backend"]] for row in rows if row["client_busy"])
         notes.append(f"client busy ({clients})")
     return "; ".join(notes) or "within limits"
 
 
-def compact_markdown(result, metadata, evidence_url, workload=WORKLOADS[0][0]):
+def compact_markdown(result, metadata, evidence_url, workload=WORKLOADS[0][0], candidate="weave"):
     rows = {(row["server_workers"], row["backend"]): row for row in result["rows"] if row["workload"] == workload}
     label = dict(zip((case[0] for case in WORKLOADS), LABELS, strict=True))[workload]
     cpu = ", ".join(processor["Name"] for processor in metadata["cpu"])
@@ -168,20 +205,38 @@ def compact_markdown(result, metadata, evidence_url, workload=WORKLOADS[0][0]):
              "Median validated round trips/second; higher is better.", "",
              "| Server cores | Weave | Asio | Tokio | Weave vs 1 core | Max throughput CV | Notes |",
              "| ---: | ---: | ---: | ---: | ---: | ---: | --- |"]
+    if "before" in metadata:
+        before_source = metadata["before"]["revision"]
+        lines[-2:] = ["| Server cores | Weave before | Weave after | Paired change | Asio | Tokio | Max throughput CV | Notes |",
+                      "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"]
+        lines[2:2] = [f"Before: [`{before_source[:7]}`](https://github.com/c-schembri/weave/commit/{before_source}); "
+                      "the archived before binary is replayed within every matched repetition block.", ""]
     if not result["timing_valid"]:
         warning = (f"**Diagnostic run: timing validation failed in {len(result['window_failures'])} measurement window(s).** "
                    "All samples are retained. This is not a passed benchmark run; affected cohorts are non-comparable.")
         lines[0:0] = [warning, ""]
+    if candidate == "weave-shared":
+        lines[0:0] = ["**Shared IOCP candidate; not the default layout.**", ""]
     for count in metadata["requested_cores"]:
         if str(count) not in metadata["cpu_masks"]:
-            lines.append(f"| {count} | N/A | N/A | N/A | N/A | N/A | insufficient physical cores |")
+            empty = " | N/A" * (6 if "before" in metadata else 5)
+            lines.append(f"| {count}{empty} | insufficient physical cores |")
             continue
-        group = [rows[count, backend] for backend in BACKENDS]
-        weave, tokio, asio = group
+        displayed = (candidate, "tokio", "asio", "weave-before") if "before" in metadata else (candidate, "tokio", "asio")
+        group = [rows[count, backend] for backend in displayed]
+        weave, tokio, asio = group[:3]
         throughput = lambda row: row["metrics"]["roundtrips_per_second"]["median"]
         cv = max(row["metrics"]["roundtrips_per_second"]["cv_pct"] for row in group)
-        lines.append(f"| {count} | {throughput(weave):,.0f} | {throughput(asio):,.0f} | {throughput(tokio):,.0f} | "
-                     f"{weave['speedup']:.2f}x | {cv:.1f}% | {quality(group)} |")
+        if "before" in metadata:
+            before = rows[count, "weave-before"]
+            pair = next(pair for pair in result["comparisons"] if pair["server_workers"] == count and
+                        pair["workload"] == workload and pair["baseline"] == "weave-before" and
+                        pair.get("candidate", "weave") == candidate)
+            lines.append(f"| {count} | {throughput(before):,.0f} | {throughput(weave):,.0f} | {(pair['ratio'] - 1) * 100:+.1f}% | "
+                         f"{throughput(asio):,.0f} | {throughput(tokio):,.0f} | {cv:.1f}% | {quality(group)} |")
+        else:
+            lines.append(f"| {count} | {throughput(weave):,.0f} | {throughput(asio):,.0f} | {throughput(tokio):,.0f} | "
+                         f"{weave['speedup']:.2f}x | {cv:.1f}% | {quality(group)} |")
     lines.extend(["", "Closed-loop loopback results, not universal runtime rankings. Client-busy rows do not establish "
                   "maximum server capacity; noisy comparisons are inconclusive for the affected metric.", "",
                   f"[Full measurements and raw evidence]({evidence_url}) / "
@@ -203,6 +258,8 @@ def full_markdown(result, metadata, evidence_url):
         lines.append("")
     for workload, label in zip(WORKLOADS, LABELS, strict=True):
         lines.extend([f"## {label}", "", compact_markdown(result, metadata, evidence_url, workload[0])])
+        if metadata.get("shared_candidate"):
+            lines.extend([f"### {label}: Shared IOCP", "", compact_markdown(result, metadata, evidence_url, workload[0], "weave-shared")])
     lines.extend(["## Per-library Measurements", "",
                   "Medians of per-window percentiles, not pooled latency. CPU time can be quantized or zero; "
                   "cycles/op is independent and never converted into seconds.", "",
@@ -217,12 +274,25 @@ def full_markdown(result, metadata, evidence_url):
                      f"{value('server_private_mb'):.2f} | [{low:.3f}, {high:.3f}] | {quality([row])} |")
     lines.extend(["", "## Matched Throughput Comparisons", "", "Weave / baseline, matched by repetition; "
                   "90% whole-block bootstrap intervals are exploratory, not simultaneous guarantees.", "",
-                  "| Workload | Cores | Baseline | Median ratio | Paired CI90 | Notes |",
-                  "| --- | ---: | --- | ---: | --- | --- |"])
+                  "| Workload | Cores | Candidate | Baseline | Median ratio | Paired CI90 | Notes |",
+                  "| --- | ---: | --- | --- | ---: | --- | --- |"])
     for pair in result["comparisons"]:
         low, high = pair["ci90"]
-        lines.append(f"| {pair['workload']} | {pair['server_workers']} | {pair['baseline']} | {pair['ratio']:.3f} | "
+        lines.append(f"| {pair['workload']} | {pair['server_workers']} | {pair.get('candidate', 'weave')} | {pair['baseline']} | {pair['ratio']:.3f} | "
                      f"[{low:.3f}, {high:.3f}] | {'timing failure; non-comparable' if not pair['timing_valid'] else ''} |")
+    if "before" in metadata or metadata.get("shared_candidate"):
+        lines.extend(["", "## Matched CPU Cost And Tail Changes", "",
+                      "Candidate / baseline ratios, with paired CI90; lower is better. These are at the same "
+                      "connection workload, not matched offered request rates. Undefined ratios are not estimated.", "",
+                      "| Workload | Cores | Candidate | Baseline | Cycles/RTT ratio | p99 ratio | p99.9 ratio |",
+                      "| --- | ---: | --- | --- | --- | --- | --- |"])
+        for pair in result["comparisons"]:
+            values = []
+            for metric in ("server_cycles_per_op", "p99_us", "p999_us"):
+                stats = pair["cost_and_tail"][metric]
+                values.append(f"{stats['ratio']:.3f} [{stats['ci90'][0]:.3f}, {stats['ci90'][1]:.3f}]" if stats else "undefined")
+            lines.append(f"| {pair['workload']} | {pair['server_workers']} | {pair.get('candidate', 'weave')} | "
+                         f"{pair['baseline']} | {' | '.join(values)} |")
     lines.extend(["", "All samples and outliers retained; no selective retries or adaptive stopping. "
                   f"Elapsed measurement supervisor time: {metadata['elapsed_seconds']:.1f}s."])
     return "\n".join(lines) + "\n"
@@ -239,8 +309,9 @@ def worker(args):
     for count in counts:
         (root / f"cores-{count:02d}").mkdir()
     samples = []
-    total = len(counts) * len(workloads) * len(BACKENDS) * args.repetitions
-    for repetition, count, workload, backend in schedule(counts, workloads, args.repetitions, args.seed):
+    libraries = backends(metadata)
+    total = len(counts) * len(workloads) * len(libraries) * args.repetitions
+    for repetition, count, workload, backend in schedule(counts, workloads, args.repetitions, args.seed, libraries):
         args.server_workers = count
         args.output_directory = root / f"cores-{count:02d}"
         sample = measure(args, backend, workload, repetition, metadata["cpu_masks"][str(count)])
@@ -268,6 +339,10 @@ def benchmark(args):
     args.server_binary = (args.build_directory / "Release/weave_runtime_server.exe").resolve(strict=True)
     args.load_binary = (args.build_directory / "Release/weave_runtime_load.exe").resolve(strict=True)
     args.tokio_binary = args.tokio_binary.resolve(strict=True)
+    require(bool(args.before_binary) == bool(args.before_evidence), "Supply both --before-binary and --before-evidence.")
+    if args.before_binary:
+        args.before_binary = args.before_binary.resolve(strict=True)
+        args.before_evidence = args.before_evidence.resolve(strict=True)
     if args.worker:
         return worker(args)
     timing_build(args.build_directory)
@@ -281,6 +356,17 @@ def benchmark(args):
                     rust_dependencies=capture(["cargo", "tree", "--locked", "--manifest-path", ROOT / "modules/tcp/benchmarks/tokio/Cargo.toml"]),
                     binaries=[file_hash(args.server_binary), file_hash(args.load_binary), file_hash(args.tokio_binary)],
                     sources=[file_hash(path) for path in source_files()])
+    if args.shared_candidate:
+        metadata["shared_candidate"] = True
+    if args.before_binary:
+        original = read_json(args.before_evidence)
+        binary = file_hash(args.before_binary)
+        require(original["protocol"] == PROTOCOL and not original["smoke"] and original["worktree"] == [] and
+                any(record["Hash"] == binary["Hash"] and Path(record["Path"]).name == "weave_runtime_server.exe"
+                    for record in original["binaries"]), "Before binary does not match archived clean-source evidence.")
+        metadata["before"] = {"revision": original["revision"], "worktree": original["worktree"],
+                              "binary": binary, "evidence": file_hash(args.before_evidence)}
+        backends(metadata)
     args.output_directory.mkdir(parents=True)
     write_json(args.output_directory / "environment.json", metadata)
     log = args.output_directory / "run.log"
@@ -289,6 +375,8 @@ def benchmark(args):
     print(log.read_text(encoding="utf-8", errors="replace"))
     require(code == 0, f"Benchmark {'timed out' if code == -1 else 'failed'}; partial evidence retained in {args.output_directory}")
     require(args.smoke or metadata["sources"] == [file_hash(path) for path in source_files()], "Sources changed during measurement.")
+    binaries = [*metadata["binaries"], *([metadata["before"]["binary"]] if "before" in metadata else [])]
+    require(all(record == file_hash(record["Path"]) for record in binaries), "Binaries changed during measurement.")
     print(f"Evidence: {args.output_directory}")
 
 
@@ -330,6 +418,9 @@ def main():
     comparison = commands.add_parser("run")
     comparison.add_argument("--build-directory", type=Path, default=ROOT / "build/windows-runtime-bench")
     comparison.add_argument("--tokio-binary", type=Path, default=ROOT / "build/tokio/release/weave-tokio-bench.exe")
+    comparison.add_argument("--before-binary", type=Path)
+    comparison.add_argument("--before-evidence", type=Path, help="Original environment.json whose server hash must match the before binary.")
+    comparison.add_argument("--shared-candidate", action="store_true", help="Also measure Weave's optional shared IOCP layout.")
     comparison.add_argument("--output-directory", type=Path, default=ROOT / "benchmarks/results" / datetime.now().strftime("scaling-%Y%m%d-%H%M%S"))
     comparison.add_argument("--server-cores", nargs="+", type=int, choices=CORE_COUNTS, default=list(CORE_COUNTS))
     comparison.add_argument("--client-cores", type=int, default=4)

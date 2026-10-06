@@ -42,6 +42,41 @@ def evidence():
 
 
 class ScalingTests(unittest.TestCase):
+    def test_before_and_shared_candidates_are_complete_matched_cohorts(self):
+        samples, metadata = evidence()
+        metadata["before"] = {"revision": "b" * 40, "worktree": [],
+                              "binary": {"Hash": "B" * 64}, "evidence": {"Hash": "C" * 64}}
+        metadata["shared_candidate"] = True
+        additions = []
+        for sample in samples:
+            if sample["backend"] != "weave":
+                continue
+            for backend, ratio in (("weave-before", 1 / 1.2), ("weave-shared", 2)):
+                count = round(sample["samples"] * ratio)
+                additions.append(dict(sample, backend=backend, samples=count, roundtrips_per_second=count / sample["wall_seconds"]))
+        samples.extend(additions)
+        result = bench_scaling.report(samples, metadata)
+        self.assertEqual(len(result["rows"]), 80)
+        self.assertEqual(len(result["comparisons"]), 96)
+        pairs = [pair for pair in result["comparisons"] if pair["baseline"] == "weave-before"]
+        self.assertEqual(len(pairs), 32)
+        for pair in pairs:
+            self.assertAlmostEqual(pair["ratio"], 1.2 if pair["candidate"] == "weave" else 2.4)
+        text = bench_scaling.compact_markdown(result, metadata, "https://example.test/evidence")
+        self.assertIn("Weave before | Weave after | Paired change", text)
+        self.assertIn("+20.0%", text)
+        shared = bench_scaling.compact_markdown(result, metadata, "https://example.test/evidence", candidate="weave-shared")
+        self.assertIn("+140.0%", shared)
+        self.assertIn("not the default", shared)
+        self.assertIn("weave-shared", bench_scaling.full_markdown(result, metadata, "https://example.test/evidence"))
+        self.assertEqual(len(list(bench_scaling.schedule([1, 2, 4, 8], WORKLOADS, 7, 60106, bench_scaling.backends(metadata)))), 560)
+        with self.assertRaises(ValueError):
+            bench_scaling.report(samples[:-1], metadata)
+        changed = copy.deepcopy(metadata)
+        changed["before"]["binary"]["Hash"] = "invalid"
+        with self.assertRaises(ValueError):
+            bench_scaling.report(samples, changed)
+
     def test_schedule_is_serial_complete_and_matched_across_core_counts(self):
         cases = list(bench_scaling.schedule([1, 2, 4, 8], WORKLOADS, 7, 60106))
         self.assertEqual(cases, list(bench_scaling.schedule([1, 2, 4, 8], WORKLOADS, 7, 60106)))

@@ -722,3 +722,66 @@ TEST_CASE_TEMPLATE(
     CHECK(invoked == 0);
   }
 }
+
+TEST_CASE_TEMPLATE(
+  "Mixed pinned and movable queue bursts drain exactly once while their parent blocks",
+  Layout,
+  support::ShardedIo,
+  support::SharedIo)
+{
+  auto runtime = support::create_runtime<Layout>({.workers = 4, .scheduler = weave::Scheduler::work_stealing});
+  REQUIRE(runtime);
+  std::array<std::thread::id, 4> owners;
+  for (std::size_t worker = 0; worker < owners.size(); ++worker) {
+    auto job = runtime->spawn_on(worker, runtime_thread());
+    REQUIRE(job);
+    auto owner = std::move(*job).get();
+    REQUIRE(owner);
+    owners[worker] = *owner;
+  }
+
+  constexpr std::size_t count = 384;
+  constexpr int rounds = 8;
+  std::array<std::atomic<int>, count> executions{};
+  std::atomic<int> violations = 0;
+  std::mutex mutex;
+  std::condition_variable wake;
+  std::size_t completed = 0;
+
+  for (int round = 0; round < rounds; ++round) {
+    completed = 0;
+    auto parent = runtime->spawn_on(0, [&](weave::Context &) -> weave::Task<bool> {
+      for (std::size_t index = 0; index < count; ++index) {
+        const bool pinned = index % 4 == 0;
+        const auto destination = 1 + index % 3;
+        auto operation = [&, index, pinned, destination](weave::Context &ctx) -> weave::Task<void> {
+          for (int turn = 0; turn < 4; ++turn) {
+            if (pinned && std::this_thread::get_id() != owners[destination])
+              ++violations;
+            co_await ctx.yield();
+          }
+          ++executions[index];
+          {
+            std::lock_guard lock(mutex);
+            ++completed;
+          }
+          wake.notify_one();
+        };
+        auto on_error = [&](weave::Error) noexcept { ++violations; };
+        if (pinned)
+          runtime->detach_on(destination, std::move(operation), on_error);
+        else
+          runtime->detach(std::move(operation), on_error);
+      }
+      // Test-only blocking forces thieves to publish and service their transferred batches.
+      std::unique_lock lock(mutex);
+      co_return wake.wait_for(lock, std::chrono::seconds(3), [&] { return completed == count; });
+    });
+    REQUIRE(parent);
+    REQUIRE(std::move(*parent).get() == true);
+  }
+  runtime->join();
+  CHECK(violations == 0);
+  for (const auto &executed : executions)
+    CHECK(executed.load() == rounds);
+}
