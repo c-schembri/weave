@@ -28,6 +28,8 @@ you want to recover. No exceptions or propagation macros.
 is implemented. Linux io_uring is planned; there is no Linux or macOS networking
 backend today. No performance advantage over other libraries is claimed.
 
+See the [development priorities](docs/roadmap.md) for the hardening and feature sequence.
+
 ## Build and try
 
 Requires Windows x64, Visual Studio 2022 with the C++ workload, CMake 3.25+, and

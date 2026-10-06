@@ -37,6 +37,16 @@ An outer Windows job owns the supervisor and descendants from suspended startup,
 with a five-minute default deadline. Timeouts fail rather than report partial
 evidence as a complete result. The supervisor also has per-process phase deadlines.
 
+Failures produce a per-window `.failure.json` with the phase, process IDs, exit
+codes observed before cleanup, and stderr tails. The client reports the first
+failing connection, operation, error code/category, and transferred/expected byte
+counts. Setup timeouts include atomic stage counts and bounded per-connection
+warmup snapshots; these are diagnostic snapshots, not a synchronized view of
+all connections. Progress instrumentation runs during setup, not each measured
+exchange. Server-side client failures are also logged for each backend. Failure
+diagnostics do not retry windows, increase deadlines, or turn partial runs into
+successful evidence.
+
 Throughput is validated completions divided by measured wall time, including final
 draining. Every completed RTT is recorded; percentiles use nearest-rank exact
 quantiles. The report takes medians of per-repetition percentiles, not pooled tails.

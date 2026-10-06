@@ -5,6 +5,7 @@
 #include <array>
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <vector>
 #include <algorithm>
 
@@ -155,6 +156,116 @@ TEST_CASE_TEMPLATE(
       CHECK_FALSE(runtime->stop_requested());
       REQUIRE(runtime->run(weave::sleep_for(1ms)));
     }
+  }
+}
+
+static weave::Task<void> burst_client(
+  weave::u16 port,
+  std::size_t index,
+  std::atomic<unsigned> &warmed,
+  std::atomic<bool> &release,
+  ServeState &state)
+{
+  auto client = co_await weave::tcp::connect("127.0.0.1", port);
+  if (auto status = client.no_delay(); !status)
+    co_await weave::fail(status.error());
+  std::array<std::byte, 1024> sent{}, received{};
+  for (std::size_t i = 0; i < sent.size(); ++i)
+    sent[i] = static_cast<std::byte>((index * 31 + i * 17) % 251);
+
+  for (unsigned round = 0; round < 8; ++round) {
+    co_await client.write_all(sent);
+    co_await client.read_exactly(received);
+    if (sent != received)
+      co_await weave::fail(std::errc::bad_message);
+  }
+  ++warmed;
+  while (!release.load())
+    co_await weave::sleep_for(1ms);
+
+  co_await client.write_all(sent);
+  if (auto status = client.shutdown_send(); !status)
+    co_await weave::fail(status.error());
+  co_await client.read_exactly(received);
+  if (sent != received || co_await client.read(received) != 0)
+    co_await weave::fail(std::errc::bad_message);
+  ++state.completed;
+}
+
+TEST_CASE_TEMPLATE(
+  "A single listener warms up 1024 live clients and drains their disconnect burst",
+  Layout,
+  support::ShardedIo,
+  support::SharedIo)
+{
+  constexpr unsigned count = 1024;
+  for (bool skip : {false, true}) {
+    CAPTURE(skip);
+    ServeState state;
+    std::atomic<unsigned> warmed = 0;
+    std::atomic<bool> release = false;
+    std::mutex failure_mutex;
+    weave::Error first_failure;
+    auto observe_failure = [&](weave::Error error) noexcept {
+      if (error == std::errc::operation_canceled)
+        return;
+      std::lock_guard lock(failure_mutex);
+      if (!first_failure)
+        first_failure = error;
+    };
+    auto client_status = [&]() -> weave::Result<void> {
+      std::lock_guard lock(failure_mutex);
+      if (first_failure)
+        return std::unexpected(first_failure);
+      return {};
+    };
+    auto runtime = support::create_runtime<Layout>(
+      {.workers = 4, .scheduler = weave::Scheduler::work_stealing, .context = {.skip_successful_completions = skip}});
+    REQUIRE(runtime);
+
+    auto body = [&](weave::TaskScope &children) -> weave::Task<void> {
+      auto listener = co_await weave::tcp::listen("127.0.0.1", 0, 8192);
+      auto server = children.spawn(serve_until_cancelled(listener, state));
+      if (!server)
+        co_await weave::fail(server.error());
+      std::vector<weave::JoinHandle<void>> clients;
+      clients.reserve(count);
+      for (unsigned i = 0; i < count; ++i) {
+        auto client = children.spawn(
+          burst_client(listener.local_port(), i, warmed, release, state).on_error(observe_failure));
+        if (!client)
+          co_await weave::fail(client.error());
+        clients.push_back(std::move(*client));
+      }
+      while (warmed != count) {
+        if (auto status = client_status(); !status)
+          co_await weave::fail(status.error());
+        if (server->ready())
+          co_await weave::fail(std::errc::io_error);
+        co_await weave::sleep_for(1ms);
+      }
+      CHECK(state.entered == count);
+      CHECK(state.active == count);
+      release = true;
+      for (auto &client : clients)
+        co_await std::move(client);
+
+      server->cancel();
+      co_await std::move(*server);
+      CHECK(state.completed == count);
+      CHECK(state.destroyed == count);
+      CHECK(state.active == 0);
+      CHECK(state.failed == 0);
+      CHECK(state.cancelled == 0);
+      CHECK(state.handler_destroyed == 1);
+    };
+    auto result = runtime->run(weave::timeout(10s, weave::scope(body)));
+    CAPTURE(warmed.load());
+    CAPTURE(state.completed.load());
+    CAPTURE(state.entered.load());
+    CAPTURE(result ? 0 : result.error().value());
+    REQUIRE(result);
+    REQUIRE(runtime->run(weave::sleep_for(1ms)));
   }
 }
 

@@ -13,6 +13,17 @@ using asio::ip::tcp;
 using bench::stress::Workload;
 static constexpr auto use_result = asio::as_tuple(asio::use_awaitable);
 
+static void client_error(std::error_code error) noexcept
+{
+  std::fprintf(
+    stderr,
+    "Client failed: code=%d category=%s message=%s\n",
+    error.value(),
+    error.category().name(),
+    error.message().c_str());
+  std::fflush(stderr);
+}
+
 static weave::Task<void> weave_session(weave::TcpStream client, Workload config)
 {
   std::vector<std::byte> buffer(config.bytes);
@@ -30,7 +41,7 @@ static weave::Task<void> weave_server(Workload config)
   std::fflush(stdout);
   for (;;) {
     auto client = co_await listener.accept({.no_delay = true});
-    weave::detach(weave_session(std::move(client), config));
+    weave::detach(weave_session(std::move(client), config), client_error);
   }
 }
 
@@ -39,12 +50,16 @@ static asio::awaitable<void> asio_session(tcp::socket client, Workload config)
   std::vector<std::byte> buffer(config.bytes);
   for (;;) {
     auto [read_error, received] = co_await asio::async_read(client, asio::buffer(buffer), use_result);
-    if (read_error || received != buffer.size())
+    if (read_error || received != buffer.size()) {
+      client_error(read_error ? read_error : std::make_error_code(std::errc::io_error));
       co_return;
+    }
     bench::stress::transform(buffer, config);
     auto [write_error, sent] = co_await asio::async_write(client, asio::buffer(buffer), use_result);
-    if (write_error || sent != buffer.size())
+    if (write_error || sent != buffer.size()) {
+      client_error(write_error ? write_error : std::make_error_code(std::errc::io_error));
       co_return;
+    }
   }
 }
 

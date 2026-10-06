@@ -3,9 +3,13 @@
 from contextlib import redirect_stdout
 import copy
 import io
+import json
 from pathlib import Path
 import sys
+import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import bench_tokio
@@ -23,6 +27,60 @@ def sample(workload, backend, repetition, factor=1.0):
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_server_startup_failure_is_recorded_without_starting_a_client(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log = root / "server.log"
+            log.write_text("Listener setup failed\n", encoding="utf-8")
+            server = Mock()
+            server.log.name = str(log)
+            server.process.pid = 123
+            server.process.poll.return_value = 1
+            server.line.side_effect = ValueError("Process ended prematurely")
+            args = SimpleNamespace(output_directory=root, server_binary="server", tokio_binary="tokio")
+            with patch.object(bench_tokio, "Child", return_value=server) as child, \
+                    self.assertRaisesRegex(ValueError, "server startup failed"):
+                bench_tokio.measure(args, "weave", bench_tokio.WORKLOADS[0], 0, {"server": 15})
+            child.assert_called_once()
+            server.close.assert_called_once()
+            failure = json.loads((root / "1024-small-00-weave.failure.json").read_text(encoding="utf-8"))
+            self.assertEqual(failure["phase"], "server startup")
+            self.assertEqual(set(failure["processes"]), {"server"})
+            self.assertEqual(failure["processes"]["server"]["exit_code"], 1)
+            self.assertIn("Listener setup failed", failure["processes"]["server"]["stderr_tail"])
+
+    def test_failed_warmup_retains_native_diagnostics_and_cleans_both_processes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            server_log, client_log = root / "server.log", root / "client.log"
+            server_log.write_text("Client failed: code=10054\n", encoding="utf-8")
+            client_log.write_text("Connection 19: stage=warmup_read warmup=3/8\n", encoding="utf-8")
+            server, client = Mock(), Mock()
+            server.log.name, client.log.name = str(server_log), str(client_log)
+            server.process.pid, client.process.pid = 123, 456
+            server.process.poll.return_value = None
+            client.process.poll.return_value = 2
+            server.line.return_value = json.dumps({"workers": 4, "port": 8080})
+            client.line.side_effect = ValueError("Process ended prematurely")
+            args = SimpleNamespace(output_directory=root, server_binary="server", tokio_binary="tokio",
+                                   load_binary="load", duration_ms=1000, client_workers=8, smoke=False)
+            with patch.object(bench_tokio, "Child", side_effect=[server, client]), \
+                    patch.object(bench_tokio, "counters") as counters, \
+                    self.assertRaisesRegex(ValueError, "client setup/warmup failed"):
+                bench_tokio.measure(args, "weave", bench_tokio.WORKLOADS[0], 6, {"server": 15, "client": 240})
+            failure = json.loads((root / "1024-small-06-weave.failure.json").read_text(encoding="utf-8"))
+            self.assertEqual(failure["workload"], "1024-small")
+            self.assertEqual(failure["repetition"], 6)
+            self.assertEqual(failure["phase"], "client setup/warmup")
+            self.assertIsNone(failure["processes"]["server"]["exit_code"])
+            self.assertEqual(failure["processes"]["client"]["exit_code"], 2)
+            self.assertIn("code=10054", failure["processes"]["server"]["stderr_tail"])
+            self.assertIn("warmup=3/8", failure["processes"]["client"]["stderr_tail"])
+            counters.assert_not_called()
+            server.close.assert_called_once()
+            client.close.assert_called_once()
+            self.assertFalse((root / "analysis.json").exists())
+
     def test_complete_paired_matrix_and_obvious_slowdown(self):
         workload = bench_tokio.WORKLOADS[:1]
         rows = [sample(workload[0][0], backend, repetition, 0.5 if backend == "weave" else 1.0)

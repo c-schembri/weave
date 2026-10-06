@@ -54,7 +54,13 @@ async fn serve(config: Workload) -> io::Result<()> {
         let (client, _) = listener.accept().await?;
         client.set_nodelay(true)?;
         tokio::spawn(async move {
-            let _ = session(client, config).await;
+            if let Err(error) = session(client, config).await {
+                eprintln!(
+                    "Client failed: code={:?} kind={:?} message={error}",
+                    error.raw_os_error(),
+                    error.kind()
+                );
+            }
         });
     }
 }

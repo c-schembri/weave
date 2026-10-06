@@ -3,6 +3,7 @@
 #include "benchmark_affinity.hpp"
 #include "runtime_workload.hpp"
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -10,6 +11,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <system_error>
 #include <vector>
 
 using asio::ip::tcp;
@@ -33,11 +35,29 @@ struct CpuTime {
 
 struct Control {
   std::atomic<std::size_t> ready = 0, done = 0, errors = 0;
+  std::atomic<bool> reported = false;
   HANDLE ready_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   HANDLE done_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   Clock::time_point deadline;
   std::size_t count;
   std::uint16_t port;
+
+  void fail(std::size_t id, const char *stage, asio::error_code error, std::size_t transferred, std::size_t expected)
+  {
+    if (reported.exchange(true, std::memory_order_relaxed))
+      return;
+    std::fprintf(
+      stderr,
+      "Connection %zu failed: stage=%s code=%d category=%s message=%s transferred=%zu expected=%zu\n",
+      id,
+      stage,
+      error.value(),
+      error.category().name(),
+      error.message().c_str(),
+      transferred,
+      expected);
+    std::fflush(stderr);
+  }
 
   ~Control()
   {
@@ -47,11 +67,28 @@ struct Control {
 };
 
 struct Connection {
+  enum class Stage {
+    connecting,
+    configuring,
+    warmup_write,
+    warmup_read,
+    waiting,
+    measuring,
+    finished,
+    count
+  };
+
+  static constexpr std::array
+    names{"connect", "no_delay", "warmup_write", "warmup_read", "gate", "measurement", "finished"};
+
   tcp::socket socket;
   asio::steady_timer gate;
   std::vector<std::byte> tx, expected, rx;
   std::vector<double> latency;
   std::size_t worker;
+  std::size_t id;
+  std::atomic<Stage> stage = Stage::connecting;
+  std::atomic<unsigned> warmed = 0;
   bool ok = true;
 
   Connection(
@@ -60,7 +97,7 @@ struct Connection {
     std::size_t owner,
     bench::stress::Workload config,
     std::size_t capacity)
-      : socket(context), gate(context), tx(config.bytes), rx(config.bytes), worker(owner)
+      : socket(context), gate(context), tx(config.bytes), rx(config.bytes), worker(owner), id(id)
   {
     for (std::size_t i = 0; i < tx.size(); ++i)
       tx[i] = static_cast<std::byte>((id * 31 + i * 17) & 255);
@@ -73,15 +110,38 @@ struct Connection {
   }
 };
 
-static asio::awaitable<bool> exchange(Connection &connection, bool record)
+static asio::awaitable<bool> exchange(Connection &connection, Control &control, bool record)
 {
   const auto start = Clock::now();
+  if (!record)
+    connection.stage.store(Connection::Stage::warmup_write, std::memory_order_relaxed);
   auto [send_error, sent] = co_await asio::async_write(connection.socket, asio::buffer(connection.tx), use_result);
-  if (send_error || sent != connection.tx.size())
+  if (send_error || sent != connection.tx.size()) {
+    control.fail(
+      connection.id,
+      record ? "write" : "warmup_write",
+      send_error ? send_error : std::make_error_code(std::errc::io_error),
+      sent,
+      connection.tx.size());
     co_return false;
+  }
+  if (!record)
+    connection.stage.store(Connection::Stage::warmup_read, std::memory_order_relaxed);
   auto [read_error, received] = co_await asio::async_read(connection.socket, asio::buffer(connection.rx), use_result);
-  if (read_error || received != connection.rx.size() || connection.rx != connection.expected)
+  if (read_error || received != connection.rx.size()) {
+    control.fail(
+      connection.id,
+      record ? "read" : "warmup_read",
+      read_error ? read_error : std::make_error_code(std::errc::io_error),
+      received,
+      connection.rx.size());
     co_return false;
+  }
+  if (connection.rx != connection.expected) {
+    control
+      .fail(connection.id, "validation", std::make_error_code(std::errc::bad_message), received, connection.rx.size());
+    co_return false;
+  }
   if (record)
     connection.latency.push_back(std::chrono::duration<double, std::micro>(Clock::now() - start).count());
   co_return true;
@@ -92,30 +152,76 @@ static asio::awaitable<void> session(Connection &connection, Control &control)
   auto [error] = co_await connection.socket.async_connect(
     tcp::endpoint(asio::ip::address_v4::loopback(), control.port),
     use_result);
-  if (!error)
-    connection.socket.set_option(tcp::no_delay(true), error);
-  connection.ok = !error;
-  if (!connection.ok)
+  if (error) {
+    control.fail(connection.id, "connect", error, 0, 0);
+    connection.ok = false;
     co_return;
+  }
+  connection.stage.store(Connection::Stage::configuring, std::memory_order_relaxed);
+  connection.socket.set_option(tcp::no_delay(true), error);
+  if (error) {
+    control.fail(connection.id, "no_delay", error, 0, 0);
+    connection.ok = false;
+    co_return;
+  }
   for (int i = 0; i < 8; ++i) {
-    if (!co_await exchange(connection, false)) {
+    if (!co_await exchange(connection, control, false)) {
       connection.ok = false;
       co_return;
     }
+    connection.warmed.store(i + 1, std::memory_order_relaxed);
   }
+  connection.stage.store(Connection::Stage::waiting, std::memory_order_relaxed);
   if (control.ready.fetch_add(1, std::memory_order_acq_rel) + 1 == control.count)
     SetEvent(control.ready_event);
   auto [gate_error] = co_await connection.gate.async_wait(use_result);
   if (gate_error != asio::error::operation_aborted) {
+    control.fail(connection.id, "gate", gate_error, 0, 0);
     connection.ok = false;
     co_return;
   }
+  connection.stage.store(Connection::Stage::measuring, std::memory_order_relaxed);
   while (Clock::now() < control.deadline) {
-    if (!co_await exchange(connection, true)) {
+    if (!co_await exchange(connection, control, true)) {
       connection.ok = false;
       co_return;
     }
   }
+  connection.stage.store(Connection::Stage::finished, std::memory_order_relaxed);
+}
+
+static void report_progress(
+  const char *phase,
+  DWORD wait_result,
+  const Control &control,
+  const std::vector<std::unique_ptr<Connection>> &connections)
+{
+  std::fprintf(
+    stderr,
+    "%s failed: wait=%lu ready=%zu/%zu done=%zu errors=%zu\n",
+    phase,
+    wait_result,
+    control.ready.load(),
+    control.count,
+    control.done.load(),
+    control.errors.load());
+  std::array<std::size_t, static_cast<std::size_t>(Connection::Stage::count)> stages{};
+  unsigned reported = 0;
+  for (const auto &connection : connections) {
+    const auto stage = connection->stage.load(std::memory_order_relaxed);
+    ++stages[static_cast<std::size_t>(stage)];
+    if (stage != Connection::Stage::waiting && stage != Connection::Stage::finished && reported++ < 16) {
+      std::fprintf(
+        stderr,
+        "Connection %zu: stage=%s warmup=%u/8\n",
+        connection->id,
+        Connection::names[static_cast<std::size_t>(stage)],
+        connection->warmed.load(std::memory_order_relaxed));
+    }
+  }
+  for (std::size_t i = 0; i < stages.size(); ++i)
+    std::fprintf(stderr, "Stage %s: %zu connections\n", Connection::names[i], stages[i]);
+  std::fflush(stderr);
 }
 
 int main(int argc, char **argv)
@@ -171,9 +277,9 @@ int main(int argc, char **argv)
         SetEvent(control.done_event);
     });
   }
-  if (WaitForSingleObject(control.ready_event, 20000) != WAIT_OBJECT_0 || control.ready != count || control.errors) {
-    std::fputs("Load generator setup or warmup failed\n", stderr);
-    std::fflush(stderr);
+  const auto ready_wait = WaitForSingleObject(control.ready_event, 20000);
+  if (ready_wait != WAIT_OBJECT_0 || control.ready != count || control.errors) {
+    report_progress("Load generator setup or warmup", ready_wait, control, connections);
     // Pending operations still borrow state; the supervisor owns process cleanup.
     ExitProcess(2);
   }
@@ -193,9 +299,9 @@ int main(int argc, char **argv)
       }
     });
   }
-  if (WaitForSingleObject(control.done_event, duration_ms + 15000) != WAIT_OBJECT_0 || control.errors) {
-    std::fputs("Load generator exchange, validation or progress failed\n", stderr);
-    std::fflush(stderr);
+  const auto done_wait = WaitForSingleObject(control.done_event, duration_ms + 15000);
+  if (done_wait != WAIT_OBJECT_0 || control.errors) {
+    report_progress("Load generator exchange, validation or progress", done_wait, control, connections);
     ExitProcess(2);
   }
   const auto wall = std::chrono::duration<double>(Clock::now() - start).count();

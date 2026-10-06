@@ -101,17 +101,21 @@ def measure(args, backend, workload, repetition, masks):
     common = [size, work, int(uneven), masks["server"]]
     server_command = [args.tokio_binary, *common] if backend == "tokio" else [args.server_binary, backend, *common]
     server = client = None
+    phase = "server startup"
     try:
         server = Child(server_command, prefix.with_suffix(".server.log"))
         ready = json.loads(server.line())
         require(ready.get("workers") == 4 and 0 < ready.get("port", 0) <= 65535, "Invalid server readiness.")
+        phase = "client setup/warmup"
         client = Child([args.load_binary, ready["port"], connections, size, work, int(uneven),
                         args.duration_ms, masks["client"], args.client_workers],
                        prefix.with_suffix(".client.log"), control=True)
         require(client.line() == "READY", "Invalid client warmup/readiness.")
+        phase = "measurement"
         before = counters(server.process)
         client.send("GO")
         require(client.line() == "MEASURED", "Client did not finish the measurement.")
+        phase = "measurement result"
         after = counters(server.process)
         sample = json.loads(client.line())
         cpu = after["cpu_seconds"] - before["cpu_seconds"]
@@ -124,11 +128,25 @@ def measure(args, backend, workload, repetition, masks):
                        "server_working_set_mb": after["working_set_bytes"] / (1024 * 1024)})
         validate_sample(sample, smoke=args.smoke)
         require(server.process.poll() is None, "Server exited during measurement.")
+        phase = "cleanup"
         server.close()
         server = None
         client.send("STOP")
         require(client.process.wait(timeout=5) == 0, "Client cleanup failed.")
         return sample
+    except Exception as error:
+        processes = {}
+        for process_name, child in (("server", server), ("client", client)):
+            if child:
+                log = Path(child.log.name)
+                processes[process_name] = {"pid": child.process.pid, "exit_code": child.process.poll(),
+                                           "stderr_log": str(log),
+                                           "stderr_tail": log.read_text(encoding="utf-8", errors="replace")[-8192:]}
+        failure = prefix.with_suffix(".failure.json")
+        write_json(failure, {"backend": backend, "workload": name,
+                             "repetition": repetition, "phase": phase, "error": str(error),
+                             "processes": processes})
+        raise ValueError(f"{backend} {workload[0]} repetition {repetition}: {phase} failed; see {failure}: {error}") from error
     finally:
         if server:
             server.close()
