@@ -135,14 +135,16 @@ TEST_CASE_TEMPLATE(
   UsocketsClient)
 {
   {
-    weave::Context reserve;
-    auto listener = weave::tcp::listen(reserve, "127.0.0.1", 0);
+    auto ctx = weave::Context::create();
+    REQUIRE(ctx);
+
+    auto listener = weave::tcp::listen(*ctx, "127.0.0.1", 0);
     REQUIRE(listener);
     auto port = listener->local_port();
-    REQUIRE(port);
+    REQUIRE(port != 0);
     REQUIRE(listener->close());
     support::CallbackGroup<Client> group(1, 1024);
-    CHECK_FALSE(group.connect(0, *port));
+    CHECK_FALSE(group.connect(0, port));
     CHECK(group.clients[0]->is_closed());
   }
   for (bool corrupt : {false, true}) {

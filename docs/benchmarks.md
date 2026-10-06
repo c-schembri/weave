@@ -16,17 +16,46 @@ download/link libuv and uSockets.
 | `modules/tcp/benchmarks/` | Echo latency, bulk/concurrent transfers, multicore TCP and 1,024 connections |
 | `benchmarks/support/` | Shared runner, profiling and Asio pool helpers |
 | `benchmarks/integration/` | Whole-system throughput, CPU and tail-latency gate |
-| `benchmarks/results/` | Historical evidence, unchanged |
+| `benchmarks/results/` | Local result artifacts, ignored by Git |
 
 Each module declares its own benchmark sources. The root harness combines them
 into the same `weave_bench` executable using object libraries so registrations
 cannot be discarded as unreferenced archive members. The full development preset
-retains all 156 cases and the separate `weave_concurrent` program's 36 cases.
-Executable paths, filters, workload parameters and measurement loops are unchanged.
+retains all 156 cases and the separate `weave_concurrent` program's original 36 cases.
+The IOCP layout comparison adds 60 cases without changing the original gate matrix.
+Existing executable paths, filters, workload parameters and measurement loops are unchanged.
+
+## Shared versus sharded IOCP
+
+```sh
+cmake --build --preset release --target weave_concurrent --parallel 4
+python scripts/bench_iocp.py --isolate-cpus
+```
+
+This manual-only experiment compares both Weave layouts under both schedulers,
+plus pinned Asio sharded/shared baselines. Ten workloads cover 1/64/256/1024
+connections, 1/2/4/8 workers, large transfers, uniform CPU work and uneven CPU
+work (every eighth connection is expensive). All sockets remain active; this is
+not an idle-client or slow-reader simulation. Connection setup/teardown, warmup,
+payload validation, CPU accounting and latency collection match across libraries.
+
+Seven randomized 250 ms windows per case fit a five-minute total budget, with
+owned-process/descendant cleanup on timeout. The collector requires every case,
+all seven distinct repetitions, at least 1000 RTT samples and progress from every
+connection. JSON retains raw evidence, source/binary hashes, medians, CVs, CPU per
+operation, p50/p99/p99.9 and exploratory 90% bootstrap intervals. These short,
+closed-loop measurements are diagnostic, not proof of a universal performance
+advantage or a default-promotion gate. No benchmarks run in automatic CI.
+
+GetProcessTimes CPU seconds can be coarse/noisy in these short windows, including
+zero medians. Do not interpret those as zero CPU cost; compare recorded process
+cycles per RTT and retain the CPU-time diagnostics. Cycles are not CPU seconds.
+An earlier shared IOCP campaign completed in 227 seconds and did not justify
+changing the sharded default. Its raw artifacts are not part of the source checkout.
 
 Narrow builds select the applicable groups. For example:
 
-```powershell
+```sh
 cmake -S . -B build/tcp-bench -DWEAVE_MODULES=tcp -DWEAVE_BUILD_BENCHMARKS=ON
 cmake --build build/tcp-bench --config Release
 ```
@@ -242,22 +271,22 @@ and the [pinned uSockets libuv backend](https://github.com/uNetworking/uSockets/
 
 ## Running
 
-Run scripts/bench.ps1 on a quiet machine, preferably with a stable power plan.
+Run `python scripts/bench.py` on a quiet machine, preferably with a stable power plan.
 The script uses randomized case interleaving, five repetitions, and 0.5 seconds
 minimum per repetition. It records machine details, dirty worktree status, Git
 revision, and raw Google Benchmark JSON. Keep raw data when reporting results.
 Do not use aggregate-only reporting for evidence: Google Benchmark can omit
 failed repetitions from aggregates. Check individual JSON samples for errors.
 
-```powershell
+```sh
 # All cases, including all four libraries' networking workloads.
-powershell -ExecutionPolicy Bypass -File scripts/bench.ps1
+python scripts/bench.py
 # Select one kind of workload with a Google Benchmark regex.
-powershell -ExecutionPolicy Bypass -File scripts/bench.ps1 -Filter 'Bulk' -Seconds 1 -Repetitions 5
+python scripts/bench.py --filter "Bulk" --seconds 1 --repetitions 5
 # 1,024 connections, both Weave modes, shared/sharded Asio, libuv, and uSockets.
-powershell -ExecutionPolicy Bypass -File scripts/bench.ps1 -Filter 'ManyConnections' -Seconds 0.5 -Repetitions 5
+python scripts/bench.py --filter "ManyConnections" --seconds 0.5 --repetitions 5
 # Only native callback baselines.
-powershell -ExecutionPolicy Bypass -File scripts/bench.ps1 -Filter 'Libuv|Usockets' -Seconds 0.5 -Repetitions 5
+python scripts/bench.py --filter "Libuv|Usockets" --seconds 0.5 --repetitions 5
 ```
 
 The separate `weave_concurrent` executable records every RTT for per-window p99,
@@ -300,34 +329,14 @@ Debug against Release, different payloads, or different connection concurrency.
 Windows thread CPU-time resolution can make short-case CPU counters noisy or
 zero; use real_time for this suite. Repeat close results before drawing conclusions.
 
-The initial exploratory run showed comparable performance, not a demonstrated
-Weave advantage. The first reproducible baseline belongs under benchmarks/results
-with its raw data and environment, not only a favorable summary table.
+## Result artifacts
 
-The [first recorded baseline](../benchmarks/results/2026-10-03-windows/README.md)
-includes both raw JSON and environment metadata. Its variability is too high
-for a reliable performance gate.
+`benchmarks/results/` is ignored local output, not part of the source checkout.
+Keep raw samples, logs, environment metadata, and analysis together for each run;
+do not commit them. Preserve existing evidence when rerunning or reanalyzing.
 
-The [IOCP tuning experiment](../benchmarks/results/2026-10-03-iocp-tuning/README.md)
-records before/after runs, a reverse-order repeat, profiling counts, and the
-remaining uncertainty versus Asio.
-
-The [frame recycling experiment](../benchmarks/results/2026-10-03-frame-recycling/README.md)
-includes allocator-disabled controls, two-order full-suite runs, heap/cache
-counters, bulk wall-time regions, and sanitizer coverage.
-
-The [multicore runtime baseline](../benchmarks/results/2026-10-03-multicore/README.md)
-records 1/2/4/8-worker CPU and TCP scaling against shared/sharded Asio, the
-single-thread before/after checks, noisy runs, and longer confirmation runs.
-
-The [selectable scheduler baseline](../benchmarks/results/2026-10-03-schedulers/README.md)
-compares affinity and stealing on balanced CPU, deliberately uneven CPU, and
-TCP batches, with original-mode regression checks and all noisy runs retained.
-
-The [1,024-connection baseline](../benchmarks/results/2026-10-03-many-connections/README.md)
-compares both Weave schedulers and shared/sharded Asio against a bounded common
-peer, with raw samples, fixture diagnostics, and 32-connection regression controls.
-
-The [four-library baseline](../benchmarks/results/2026-10-04-native-baselines/README.md)
-adds pinned libuv/uSockets, all networking workloads, affine CPU controls,
-fresh Weave before/after measurements, and raw repetition-level evidence.
+Curated reports may live in documentation, but published performance claims should
+link to separately available raw artifacts, including source/binary hashes and
+environment details. A favorable summary table alone is not sufficient evidence.
+The gate accepts an external baseline directory for version-to-version comparisons.
+Correctness tests use synthetic fixtures and do not depend on local result archives.

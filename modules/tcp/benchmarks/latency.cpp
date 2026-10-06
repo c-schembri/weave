@@ -60,19 +60,20 @@ static void finish(benchmark::State &state, const std::vector<std::byte> &tx, co
 static void Weave(benchmark::State &state)
 {
   support::EchoPeer peer;
-  weave::Context ctx;
-  if (!ctx.status()) {
+  auto ctx = weave::Context::create();
+  if (!ctx) {
     state.SkipWithError("Weave context failed");
     return;
   }
-  auto socket = ctx.run(weave::tcp::connect(ctx, "127.0.0.1", peer.port()));
+
+  auto socket = ctx->run(weave::tcp::connect(*ctx, "127.0.0.1", peer.port()));
   if (!socket || !socket->no_delay()) {
     state.SkipWithError("Weave setup failed");
     return;
   }
   std::vector<std::byte> tx(static_cast<std::size_t>(state.range(0)), std::byte{0x5a}), rx(tx.size());
-  const auto dequeues_before = ctx.metrics().dequeue_calls;
-  if (!ctx.run(weave_roundtrips(state, *socket, tx, rx)))
+  const auto dequeues_before = ctx->metrics().dequeue_calls;
+  if (!ctx->run(weave_roundtrips(state, *socket, tx, rx)))
     state.SkipWithError("Roundtrip task failed");
   finish(state, tx, rx);
   if (!socket->close())
@@ -81,7 +82,7 @@ static void Weave(benchmark::State &state)
   if (!peer.ok())
     state.SkipWithError("Peer failed");
   if (state.iterations() != 0) {
-    state.counters["dequeues/roundtrip"] = static_cast<weave::f64>(ctx.metrics().dequeue_calls - dequeues_before) /
+    state.counters["dequeues/roundtrip"] = static_cast<weave::f64>(ctx->metrics().dequeue_calls - dequeues_before) /
       static_cast<weave::f64>(state.iterations());
   }
 }

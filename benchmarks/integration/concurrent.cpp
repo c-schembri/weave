@@ -23,6 +23,7 @@ static experiment::CpuPartition cpu_partition;
 struct Workload {
   std::size_t connections, workers, bytes;
   int work;
+  bool uneven = false;
 };
 
 static constexpr std::array<Workload, 6> workloads{
@@ -32,6 +33,18 @@ static constexpr std::array<Workload, 6> workloads{
     {1024, 8, 1024, 0},
     {256, 4, 65536, 0},
     {1024, 4, 1024, 512}}};
+
+static constexpr std::array<Workload, 10> backend_workloads{
+  {{1, 1, 1024, 0},
+    {64, 2, 1024, 0},
+    {64, 4, 1024, 0},
+    {1024, 1, 1024, 0},
+    {1024, 2, 1024, 0},
+    {1024, 4, 1024, 0},
+    {1024, 8, 1024, 0},
+    {256, 4, 65536, 0},
+    {1024, 4, 1024, 512},
+    {1024, 4, 1024, 20000, true}}};
 
 struct CpuTime {
   weave::u64 kernel = 0, user = 0, cycles = 0;
@@ -336,22 +349,28 @@ static bool weave_window(
 }
 
 template <class F>
-static bool with_weave(Workload config, weave::Scheduler scheduler, F body)
+static bool with_weave(
+  Workload config,
+  weave::Scheduler scheduler,
+  F body,
+  weave::IoLayout layout = weave::IoLayout::sharded)
 {
   const auto count = config.connections, workers = config.workers;
   experiment::PeerProcess peer(cpu_partition.peer);
   if (!peer.valid())
     return false;
   std::vector<WeaveConnection> connections(count);
-  weave::Runtime runtime({.workers = workers, .scheduler = scheduler});
-  if (!runtime.status())
+  auto runtime = weave::Runtime::create({.workers = workers, .scheduler = scheduler, .io_layout = layout});
+  if (!runtime)
     return false;
   bool ok = true;
   for (std::size_t i = 0; i < count; ++i) {
-    connections[i].initialize(i, config.bytes, sample_capacity(count), config.work);
-    auto setup = runtime.spawn_on(i % workers, [&, i](weave::Context &ctx) -> weave::Task<void> {
+    const auto work = !config.uneven || i % 8 == 0 ? config.work : 0;
+    connections[i].initialize(i, config.bytes, sample_capacity(count), work);
+    auto setup = runtime->spawn_on(i % workers, [&, i](weave::Context &ctx) -> weave::Task<void> {
       auto socket = co_await weave::tcp::connect(ctx, "127.0.0.1", peer.port(i));
-      co_await socket.no_delay();
+      if (auto status = socket.no_delay(); !status)
+        co_await weave::fail(status.error());
       connections[i].socket.emplace(std::move(socket));
     });
     weave::detail::require(static_cast<bool>(setup));
@@ -361,20 +380,20 @@ static bool with_weave(Workload config, weave::Scheduler scheduler, F body)
     }
   }
   if (ok)
-    ok = body(runtime, connections, peer);
+    ok = body(*runtime, connections, peer);
   // Have the peer actively close first, avoiding client ephemeral-port exhaustion.
   ok = peer.stop() && ok;
   for (std::size_t i = 0; i < count; ++i) {
     if (!connections[i].socket)
       continue;
-    auto cleanup = runtime.spawn_on(i % workers, [&, i](weave::Context &) -> weave::Task<void> {
+    auto cleanup = runtime->spawn_on(i % workers, [&, i](weave::Context &) -> weave::Task<void> {
       connections[i].socket.reset();
       co_return;
     });
     weave::detail::require(static_cast<bool>(cleanup));
     weave::detail::require(static_cast<bool>(std::move(*cleanup).get()));
   }
-  runtime.join();
+  runtime->join();
   return ok;
 }
 
@@ -422,7 +441,8 @@ static bool with_asio(Workload config, bool sharded, F body)
   sockets.reserve(count);
   asio::error_code error;
   for (std::size_t i = 0; i < count; ++i) {
-    payloads[i].initialize(i, config.bytes, sample_capacity(count), config.work);
+    const auto work = !config.uneven || i % 8 == 0 ? config.work : 0;
+    payloads[i].initialize(i, config.bytes, sample_capacity(count), work);
     sockets.emplace_back(pool.context(i % workers));
     sockets.back().connect(tcp::endpoint(asio::ip::address_v4::loopback(), peer.port(i)), error);
     if (error) {
@@ -454,31 +474,43 @@ static Workload arguments_from(const benchmark::State &state)
 }
 
 template <bool Task>
-static void weave_concurrent(benchmark::State &state, weave::Scheduler scheduler)
+static void weave_concurrent(
+  benchmark::State &state,
+  weave::Scheduler scheduler,
+  weave::IoLayout layout = weave::IoLayout::sharded,
+  bool backend = false)
 {
-  const auto config = arguments_from(state);
-  const bool ok = with_weave(config, scheduler, [&](auto &runtime, auto &connections, auto &peer) {
-    Measurement measurement;
-    std::vector<weave::f64> scratch;
-    for (auto _ : state) {
-      const bool success = weave_window(Task, runtime, connections, peer, config, scheduler, measurement);
-      state.SetIterationTime(measurement.wall);
-      if (!success || !measurement.collect(state.counters, connections, scratch))
-        return false;
-      const auto samples = static_cast<weave::i64>(state.counters["samples"]);
-      state.SetItemsProcessed(samples);
-      state.SetBytesProcessed(samples * static_cast<weave::i64>(config.bytes) * 2);
-    }
-    return true;
-  });
+  auto config = arguments_from(state);
+  if (backend)
+    config.uneven = state.range(4) != 0;
+  const bool ok = with_weave(
+    config,
+    scheduler,
+    [&](auto &runtime, auto &connections, auto &peer) {
+      Measurement measurement;
+      std::vector<weave::f64> scratch;
+      for (auto _ : state) {
+        const bool success = weave_window(Task, runtime, connections, peer, config, scheduler, measurement);
+        state.SetIterationTime(measurement.wall);
+        if (!success || !measurement.collect(state.counters, connections, scratch))
+          return false;
+        const auto samples = static_cast<weave::i64>(state.counters["samples"]);
+        state.SetItemsProcessed(samples);
+        state.SetBytesProcessed(samples * static_cast<weave::i64>(config.bytes) * 2);
+      }
+      return true;
+    },
+    layout);
   if (!ok)
     state.SkipWithError("Weave fixture, exchange, progress, or drain failed");
 }
 
 template <bool Sharded>
-static void asio_concurrent(benchmark::State &state)
+static void asio_concurrent(benchmark::State &state, bool backend = false)
 {
-  const auto config = arguments_from(state);
+  auto config = arguments_from(state);
+  if (backend)
+    config.uneven = state.range(4) != 0;
   const bool ok = with_asio(config, Sharded, [&](auto &pool, auto &sockets, auto &payloads, auto &peer) {
     Measurement measurement;
     std::vector<weave::f64> scratch;
@@ -549,6 +581,59 @@ BENCHMARK(WeaveExplicitConcurrentStealing)->Apply(arguments);
 BENCHMARK(WeaveConcurrentStealing)->Apply(arguments);
 BENCHMARK(AsioConcurrentAffine)->Apply(arguments);
 BENCHMARK(AsioConcurrentShared)->Apply(arguments);
+
+static void WeaveIocpShardedAffine(benchmark::State &state)
+{
+  weave_concurrent<true>(state, weave::Scheduler::worker_affine, weave::IoLayout::sharded, true);
+}
+
+static void WeaveIocpSharedAffine(benchmark::State &state)
+{
+  weave_concurrent<true>(state, weave::Scheduler::worker_affine, weave::IoLayout::shared, true);
+}
+
+static void WeaveIocpShardedStealing(benchmark::State &state)
+{
+  weave_concurrent<true>(state, weave::Scheduler::work_stealing, weave::IoLayout::sharded, true);
+}
+
+static void WeaveIocpSharedStealing(benchmark::State &state)
+{
+  weave_concurrent<true>(state, weave::Scheduler::work_stealing, weave::IoLayout::shared, true);
+}
+
+static void AsioIocpSharded(benchmark::State &state)
+{
+  asio_concurrent<true>(state, true);
+}
+
+static void AsioIocpShared(benchmark::State &state)
+{
+  asio_concurrent<false>(state, true);
+}
+
+static void backend_arguments(benchmark::internal::Benchmark *b)
+{
+  for (const auto &w : backend_workloads) {
+    b->Args(
+      {static_cast<weave::i64>(w.connections),
+        static_cast<weave::i64>(w.workers),
+        static_cast<weave::i64>(w.bytes),
+        w.work,
+        w.uneven ? 1 : 0});
+  }
+  b->ArgNames({"connections", "workers", "bytes", "cpu", "uneven"})
+    ->Iterations(1)
+    ->UseManualTime()
+    ->Unit(benchmark::kMillisecond);
+}
+
+BENCHMARK(WeaveIocpShardedAffine)->Apply(backend_arguments);
+BENCHMARK(WeaveIocpSharedAffine)->Apply(backend_arguments);
+BENCHMARK(WeaveIocpShardedStealing)->Apply(backend_arguments);
+BENCHMARK(WeaveIocpSharedStealing)->Apply(backend_arguments);
+BENCHMARK(AsioIocpSharded)->Apply(backend_arguments);
+BENCHMARK(AsioIocpShared)->Apply(backend_arguments);
 
 static int paired_run(const std::string &path, bool smoke, int injected_work)
 {

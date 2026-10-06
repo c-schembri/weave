@@ -105,19 +105,20 @@ static void account(benchmark::State &state, weave::i64 size, weave::i64 connect
 static void WeaveBulk(benchmark::State &state)
 {
   support::EchoPeer peer;
-  weave::Context ctx;
-  if (!ctx.status()) {
+  auto ctx = weave::Context::create();
+  if (!ctx) {
     state.SkipWithError("Context failed");
     return;
   }
-  auto socket = ctx.run(weave::tcp::connect(ctx, "127.0.0.1", peer.port()));
+
+  auto socket = ctx->run(weave::tcp::connect(*ctx, "127.0.0.1", peer.port()));
   if (!socket || !socket->no_delay()) {
     state.SkipWithError("Connection failed");
     return;
   }
   Buffers data(static_cast<std::size_t>(state.range(0)));
-  bench::Profile profile(ctx);
-  if (!ctx.run(weave_bulk(state, *socket, data)))
+  bench::Profile profile(*ctx);
+  if (!ctx->run(weave_bulk(state, *socket, data)))
     state.SkipWithError("Bulk task failed");
   profile.report(state);
   if (data.tx != data.rx)
@@ -212,16 +213,17 @@ template <std::size_t N>
 static void WeaveConcurrent(benchmark::State &state)
 {
   std::vector<std::unique_ptr<support::EchoPeer>> peers;
-  weave::Context ctx;
-  if (!ctx.status()) {
+  auto ctx = weave::Context::create();
+  if (!ctx) {
     state.SkipWithError("Context failed");
     return;
   }
+
   std::vector<weave::TcpStream> sockets;
   std::vector<Buffers> data;
   for (std::size_t i = 0; i < N; ++i) {
     peers.push_back(std::make_unique<support::EchoPeer>());
-    auto socket = ctx.run(weave::tcp::connect(ctx, "127.0.0.1", peers.back()->port()));
+    auto socket = ctx->run(weave::tcp::connect(*ctx, "127.0.0.1", peers.back()->port()));
     if (!socket || !socket->no_delay()) {
       state.SkipWithError("Connection failed");
       return;
@@ -229,8 +231,8 @@ static void WeaveConcurrent(benchmark::State &state)
     sockets.push_back(std::move(*socket));
     data.emplace_back(static_cast<std::size_t>(state.range(0)));
   }
-  bench::Profile profile(ctx);
-  if (!ctx.run(weave_batches(state, sockets, data, std::make_index_sequence<N>{})))
+  bench::Profile profile(*ctx);
+  if (!ctx->run(weave_batches(state, sockets, data, std::make_index_sequence<N>{})))
     state.SkipWithError("Batch task failed");
   profile.report(state);
   for (std::size_t i = 0; i < N; ++i) {

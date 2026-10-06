@@ -89,13 +89,14 @@ static asio::awaitable<void> asio_calls(benchmark::State &state)
 
 static void WeaveExplicitTask(benchmark::State &state)
 {
-  weave::Context context;
-  if (!context.status()) {
+  auto ctx = weave::Context::create();
+  if (!ctx) {
     state.SkipWithError("Context failed");
     return;
   }
-  bench::Profile profile(context);
-  if (!context.run(weave_calls<explicit_chain>(state)))
+
+  bench::Profile profile(*ctx);
+  if (!ctx->run(weave_calls<explicit_chain>(state)))
     state.SkipWithError("Unexpected root failure");
   profile.report(state);
   state.SetItemsProcessed(state.iterations());
@@ -103,13 +104,14 @@ static void WeaveExplicitTask(benchmark::State &state)
 
 static void WeaveTask(benchmark::State &state)
 {
-  weave::Context context;
-  if (!context.status()) {
+  auto ctx = weave::Context::create();
+  if (!ctx) {
     state.SkipWithError("Context failed");
     return;
   }
-  bench::Profile profile(context);
-  if (!context.run(weave_calls(state)))
+
+  bench::Profile profile(*ctx);
+  if (!ctx->run(weave_calls(state)))
     state.SkipWithError("Unexpected root failure");
   profile.report(state);
   state.SetItemsProcessed(state.iterations());
@@ -117,13 +119,14 @@ static void WeaveTask(benchmark::State &state)
 
 static void WeaveReturnTask(benchmark::State &state)
 {
-  weave::Context context;
-  if (!context.status()) {
+  auto ctx = weave::Context::create();
+  if (!ctx) {
     state.SkipWithError("Context failed");
     return;
   }
-  bench::Profile profile(context);
-  if (!context.run(weave_calls<weave_return_chain>(state)))
+
+  bench::Profile profile(*ctx);
+  if (!ctx->run(weave_calls<weave_return_chain>(state)))
     state.SkipWithError("Unexpected root failure");
   profile.report(state);
   state.SetItemsProcessed(state.iterations());

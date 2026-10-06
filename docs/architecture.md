@@ -12,8 +12,8 @@ do not invent performance claims or add complexity without evidence.
 ```text
 modules/
   core/       Task, Result, numeric types, coroutine frame allocator
-  io/         Context, completion engine, handle registry, continuation routing
-  runtime/    Worker threads, scheduling policies, spawn and join
+  io/         Context, completion engine, task ownership, spawn and JoinHandle
+  runtime/    Worker threads, scheduling policies, cross-context coordination
   tcp/        Sockets, listeners, connect/accept, reads/writes, Winsock lifetime
 tests/
   integration/   Contracts spanning runtime, TCP, and tasks
@@ -22,7 +22,7 @@ test_support/    Shared fixtures, never part of the library
 benchmarks/
   support/       Shared comparison harness, runner, and Asio helpers
   integration/   Whole-system concurrent throughput/CPU/tail-latency workload
-  results/       Historical evidence, kept at its original paths
+  results/       Local benchmark outputs, ignored by Git
 cmake/           Library build/install helpers
 ```
 
@@ -53,6 +53,10 @@ narrower entry point. Installed template internals live under the owning
 feature's `detail/`; private compiled implementation headers stay in `src/`.
 There is no global library `include/`, `src/`, or catch-all `detail/` directory.
 
+`<weave/tcp/serve.hpp>` adds concurrent client dispatch using IO's existing
+`TaskScope` and submission hooks. It retains handlers and drains clients before
+returning, without depending on Runtime or adding another execution layer.
+
 ```text
 weave::core
     ^
@@ -76,6 +80,28 @@ dependencies, native headers in public headers, and missing required components.
 The TCP consumer performs a loopback exchange without the runtime. Runtime
 consumers exercise both schedulers without TCP.
 
+### Namespace visibility
+
+Public concepts and their member definitions live in `weave` (including the
+`weave::tcp` entry points). Shared internal contracts live in `weave::detail`:
+`IoAccess`, `Operation`, `Posted`, execution state, timer records/queues, and
+submission/scheduler machinery. Header-required template helpers also belong there;
+being private alone is not a reason to use `detail`.
+
+Library `.cpp` files keep file/platform-specific helpers, types, and state in an
+anonymous namespace inside `weave`, before public/member implementations. Windows
+TCP's socket helpers, operation guard, and native awaiter are local; they do not
+become part of the shared backend contract. Timer awaiters, IOCP completion keys,
+and the runtime's current-task pointer are local to their respective implementations.
+
+Private nested `Context::Impl` and `Runtime::Impl` definitions stay in their
+enclosing namespace as C++ requires. `detail::schedule` stays named because its
+header-declared friendship grants access to Runtime's private implementation.
+Backend hooks such as `post`, `context_cancellation`, `IoAccess`, and `ContextAccess`
+keep external linkage so separately compiled modules and header-instantiated
+submission/join code can call their implementations. No additional runtime layer
+or public API is introduced by these visibility boundaries.
+
 ### Future protocols
 
 Add HTTP, WebSocket, PostgreSQL, TLS, and other modules as real features arrive,
@@ -94,8 +120,40 @@ TLS, not HTTP. We are establishing those boundaries, not implementing them now.
 
 ## Data and execution
 
-Each Context owns a private backend allocation with one IOCP and a contiguous
-64-entry completion buffer. The public Context has no native OS types.
+Each Context owns a private backend allocation and a contiguous 64-entry
+completion buffer. Standalone Contexts and sharded runtime workers own their
+IOCP; shared runtime workers borrow one runtime I/O domain's port. The public
+Context has no native OS types.
+`Context::create(options)` returns `Result<Context>`: IOCP setup errors are returned
+before any Context is published. Guaranteed copy elision constructs the immovable
+Context directly in its owning result, with no extra allocation. A private factory
+key permits in-place construction without exposing an unchecked constructor.
+Sockets and queued continuations borrow the Context's stable address, so the result
+must outlive them. The runtime creates and owns each worker's result on that worker.
+
+`Runtime::create(options)` likewise returns an immovable `Result<Runtime>` only
+after worker startup succeeds. Workers borrow the stable backend allocation during
+startup, before the Runtime object is constructed in-place. Startup failure stops
+and joins started workers before returning the error. `Runtime::run` submits a root
+and waits on the calling thread; workers drive the event loops. It does not close
+admission or join independent work. Runtime destruction cancels and drains that work.
+
+Context is an independent execution unit, not a thread. It accepts thread-safe
+task or factory submissions and drives them on its owning/calling thread. Factories
+may take no arguments or Context &; direct tasks transfer an already-created frame.
+Spawned factories,
+root tasks, deferred cleanup, and JoinHandle publication share one implementation
+in IO; Runtime adds scheduling state rather than a second task-lifetime model.
+Standalone context tasks stay on their owner. A custom coordinator can create
+contexts on its own threads, submit through Context::spawn, drive Context::run(),
+and request stop without including or linking Runtime. See [Context](context.md).
+
+All contexts register their sockets, including sockets created before run(), so
+cooperative stop can cancel and drain pending I/O. Admission and stop share a
+submission lock; accepted roots retain ownership until deferred cleanup completes.
+Runtime accounts for Context::spawn tasks submitted on its workers as well as its
+own scheduled roots, and closes both admission paths before declaring itself drained.
+
 GetQueuedCompletionStatusEx dequeues a batch. A completion points directly to
 the Operation embedded in its suspended coroutine frame; there is no virtual
 dispatch, per-operation shared_ptr, or separately allocated callback record.
@@ -166,6 +224,15 @@ registrations. It serializes each root task's resumptions, synchronizes socket
 registry/submission access, and drains executing dispatches before context exit.
 There is no implicit global runtime; see runtime.md for ownership restrictions.
 
+I/O layout is independent of scheduling: the sharded control remains the default;
+the opt-in shared IOCP is serviced by every runtime worker. Completion collection
+does not transfer execution ownership. Movable roots use their serialized executor;
+affine/Context-owned work is routed to the owner's intrusive ready queue. Targeted
+no-op APCs interrupt alertable waits without running user code. The port has one
+shared lifetime allocation per runtime domain, not per operation. Shutdown retains
+all worker Contexts until both scheduled dispatches and dequeued completion batches
+have unwound, including cross-worker publication after a task finishes.
+
 ## Task completion
 
 `Task<T>` is the only public coroutine type. Its promise stores explicit running,
@@ -174,8 +241,9 @@ success continuation. A failed child routes control to the nearest result
 boundary without resuming the skipped bodies. Those parents are still suspended
 at their awaits, not at final_suspend; handle.done() is not a completion test.
 
-Context drives a native Task root. Runtime owns each factory and its native root,
-then schedules root cleanup on a valid worker before publishing the join result.
+Context drives a native Task root. Context::spawn and Runtime::spawn retain each
+native root and any factory, then defer root cleanup until resumption unwinds before
+publishing the join result on a valid execution thread.
 No alternative coroutine model or per-operation adapter sits around IOCP tasks.
 Completed failed chains are destroyed iteratively, inside-out, before a result
 observer resumes. Pending operations must still complete before their frames can
@@ -191,11 +259,37 @@ translation. Each native socket holds a Winsock startup reference until successf
 close, including setup failure, moves and migration. There is no process-global
 destructor that can tear Winsock down before a late runtime shutdown.
 
+Contextless TCP setup is lazy and uses IO's thread-local active Context when the
+setup Task begins execution. Context drivers establish that scope; no Runtime
+dependency or implicit event loop is introduced. No active Context is a fatal
+contract violation. Explicit Context overloads remain available, including
+synchronous listener setup. Socket/listener objects retain the selected Context
+and IOCP registration across coroutine migration; subsequent operations never
+rebind them to the current worker. Endpoint strings are borrowed through setup.
+
+Free detach resolves an IO-owned submission scope, distinct from the current
+root's continuation Executor. Standalone/custom Context drivers and affine
+workers submit locally. Stealing workers install a coordinator hook and use
+shared scheduler-compatible root storage to submit independent movable roots,
+with the same single ownership allocation as explicit Runtime detach. Runtime
+startup publishes its owning object before tasks can use that hook; Context
+leave clears the thread-local submission scope. The scope selects submission,
+not resource binding or parent-child joining, and introduces no IO-to-Runtime
+link dependency. Explicit member submissions remain available outside execution.
+
+TCP also validates execution compatibility before asynchronous entry/submission.
+An owner-thread match alone is insufficient: a foreign Context must be in the
+same stealing domain and have a runtime continuation Executor, or fail a contract.
+This prevents an unrelated same-thread loop from awaiting completions queued to
+another port, and prevents Context-owned tasks from accidentally migrating.
+Synchronous explicit listener setup and cleanup do not require an active loop.
+
 TCP shares IO's private `src/windows/iocp.hpp` backend contract only at build
 time. This dependency does not enter installed headers or exported include paths.
 Runtime uses a platform-neutral ContextAccess contract. IO routes stolen
 continuations through a non-owning Executor hook, not a hard reference to a
-runtime function; affine and standalone continuations still resume directly.
+runtime function; standalone continuations still resume directly. Shared-port
+affine continuations collected elsewhere are queued to their owning Context.
 The runtime retains its existing root serialization and lifetime rules.
 
 The scheduler hook adds no per-operation allocation or virtual object hierarchy.

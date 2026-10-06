@@ -1,9 +1,0 @@
-{
-    "protocol":  "weave2-paired-5m-v2",
-    "decision":  "inconclusive",
-    "exit_code":  2,
-    "budget_seconds":  300,
-    "elapsed_seconds":  230.4772064,
-    "runner_sha256":  "A7F5C32E5FE37D6F47AF6C6703D9CC07648C61411CBA0B699BCB396C3105A148",
-    "supervisor_sha256":  "64C70FDD1686BD1994271C3D4D81BF2CA82931B4C073C70B9FABB1B5C4C90FEA"
-}

@@ -1,9 +1,0 @@
-{
-    "protocol":  "weave-task-policy-5m-v1",
-    "decision":  "measurement_unreliable",
-    "exit_code":  5,
-    "budget_seconds":  300,
-    "elapsed_seconds":  234.1935704,
-    "runner_sha256":  "51F13B85F925A98D4D26CDA98BE11AF2D5148BD8FB2214922997EEBB7E9FA992",
-    "supervisor_sha256":  "64C70FDD1686BD1994271C3D4D81BF2CA82931B4C073C70B9FABB1B5C4C90FEA"
-}

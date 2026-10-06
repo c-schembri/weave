@@ -51,17 +51,18 @@ static void weave_tcp_benchmark(benchmark::State &state, weave::Scheduler schedu
   std::vector<std::unique_ptr<support::EchoPeer>> peers;
   std::array<WeaveConnection, jobs_per_batch> connections;
   const auto workers = static_cast<std::size_t>(state.range(0));
-  weave::Runtime runtime({.workers = workers, .scheduler = scheduler});
-  if (!runtime.status()) {
+  auto runtime = weave::Runtime::create({.workers = workers, .scheduler = scheduler});
+  if (!runtime) {
     state.SkipWithError("Runtime setup failed");
     return;
   }
   bool setup_ok = true;
   for (std::size_t i = 0; i < jobs_per_batch; ++i) {
     peers.push_back(std::make_unique<support::EchoPeer>());
-    auto setup = runtime.spawn_on(i % workers, [&, i](weave::Context &ctx) -> weave::Task<void> {
+    auto setup = runtime->spawn_on(i % workers, [&, i](weave::Context &ctx) -> weave::Task<void> {
       auto socket = co_await weave::tcp::connect(ctx, "127.0.0.1", peers[i]->port());
-      co_await socket.no_delay();
+      if (auto status = socket.no_delay(); !status)
+        co_await weave::fail(status.error());
       connections[i].socket.emplace(std::move(socket));
     });
     weave::detail::require(static_cast<bool>(setup));
@@ -78,8 +79,8 @@ static void weave_tcp_benchmark(benchmark::State &state, weave::Scheduler schedu
     for (auto _ : state) {
       for (std::size_t i = 0; i < jobs_per_batch; ++i) {
         auto exchange = [&, i](weave::Context &) { return weave_exchange(connections[i]); };
-        auto job = scheduler == weave::Scheduler::work_stealing ? runtime.spawn(exchange)
-                                                                : runtime.spawn_on(i % workers, exchange);
+        auto job = scheduler == weave::Scheduler::work_stealing ? runtime->spawn(exchange)
+                                                                : runtime->spawn_on(i % workers, exchange);
         weave::detail::require(static_cast<bool>(job));
         jobs.push_back(std::move(*job));
       }
@@ -99,14 +100,14 @@ static void weave_tcp_benchmark(benchmark::State &state, weave::Scheduler schedu
       continue;
     if (setup_ok && connections[i].tx != connections[i].rx)
       state.SkipWithError("Payload mismatch");
-    auto cleanup = runtime.spawn_on(i % workers, [&, i](weave::Context &) -> weave::Task<void> {
+    auto cleanup = runtime->spawn_on(i % workers, [&, i](weave::Context &) -> weave::Task<void> {
       connections[i].socket.reset();
       co_return;
     });
     weave::detail::require(static_cast<bool>(cleanup));
     weave::detail::require(static_cast<bool>(std::move(*cleanup).get()));
   }
-  runtime.join();
+  runtime->join();
   for (auto &peer : peers) {
     // If connect failed, the fixture destructor closes its pending accept.
     if (setup_ok)

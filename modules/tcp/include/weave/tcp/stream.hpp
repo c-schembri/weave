@@ -11,6 +11,8 @@ class TcpListener;
 namespace tcp {
 
 Task<TcpStream> connect(Context &context, const char *ipv4, u16 port);
+// Lazy setup on the executing Context. ipv4 must remain alive until setup finishes.
+Task<TcpStream> connect(const char *ipv4, u16 port);
 
 } // namespace tcp
 

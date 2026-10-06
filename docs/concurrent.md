@@ -82,10 +82,10 @@ throughput, but these tests do not establish arbitrary production SLOs.
 
 Build Debug and Release using the instructions in [README.md](../README.md), then:
 
-```powershell
+```sh
 ctest --preset debug
 ctest --preset release
-./scripts/bench-concurrent.ps1 -DurationMilliseconds 1000 -Repetitions 7
+python scripts/bench_concurrent.py --duration-ms 1000 --repetitions 7
 ```
 
 The script runs two independent, randomly interleaved sets. The 36 cases produce
@@ -101,7 +101,7 @@ Provisional limits, selected before the repeated comparison:
 - No more than 10% increase in p99 latency.
 
 CPU seconds per operation and core equivalents remain visible diagnostics rather
-than being conflated with cycle counts. `analyze-concurrent.ps1` calculates median
+than being conflated with cycle counts. `analyze_concurrent.py` calculates median
 ratios and 90% independent bootstrap intervals with 20,000 deterministic resamples.
 It resamples **repetitions**, not the correlated RTT observations inside each run.
 A one-sided bound must fit inside the limit to mark that metric `within_limit`;
@@ -116,7 +116,6 @@ samples) use `null`, not invalid JSON numeric infinities.
 These small-sample, per-case intervals are exploratory and do not provide a
 simultaneous family-wise guarantee across the entire matrix. A clear improvement
 is acceptable; this is a non-regression gate, not a demand for exact equality.
-See the [historical prototype results](../benchmarks/results/2026-10-04-concurrent-parity/README.md).
 The [five-minute CI gate](gate.md) uses seven paired ABBA/BAAB blocks of 250 ms
 windows per case, plus interleaved A/A controls and matched Asio diagnostics.
 Both Task policies are warmed before the measured sequence; no extra
@@ -124,8 +123,9 @@ warmup exchanges are inserted between its windows. It bootstraps whole paired
 blocks, not independent repetitions. It retains the workload matrix, thresholds,
 optional CPU placement, and setup-through-analysis process-tree watchdog. Failed
 same-code controls invalidate a run; unresolved candidate intervals cannot pass.
-See the [historical paired results](../benchmarks/results/2026-10-04-paired-ci-gate/README.md), which must
-not be conflated with the legacy research protocol above.
+Do not conflate results from this paired protocol with the legacy research protocol
+above. Raw results are ignored local or separately published artifacts, not bundled
+with the source checkout.
 
 ## Correctness coverage
 

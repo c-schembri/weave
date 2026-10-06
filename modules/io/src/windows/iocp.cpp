@@ -9,41 +9,238 @@
 
 namespace weave {
 
-static Error win_error(DWORD code)
+namespace {
+
+constexpr ULONG_PTR posted_key = 1;
+constexpr ULONG_PTR wake_key = 2;
+
+Error win_error(DWORD code)
 {
   return {static_cast<int>(code), std::system_category()};
 }
 
-Context::Context(ContextOptions options) noexcept : impl_(new (std::nothrow) Impl)
+} // namespace
+
+void detail::TimerQueue::swap(std::size_t a, std::size_t b) noexcept
 {
-  detail::require(impl_ != nullptr);
-  impl_->options_ = options;
-  impl_->port_ = CreateIoCompletionPort(INVALID_HANDLE_VALUE, nullptr, 0, 1);
-  if (!impl_->port_)
-    impl_->error_ = win_error(GetLastError());
+  std::swap(heap[a], heap[b]);
+  heap[a]->index = a;
+  heap[b]->index = b;
+}
+
+void detail::TimerQueue::repair(std::size_t index) noexcept
+{
+  while (index > 0) {
+    const auto parent = (index - 1) / 2;
+    if (heap[parent]->deadline <= heap[index]->deadline)
+      break;
+    swap(parent, index);
+    index = parent;
+  }
+  for (;;) {
+    const auto left = index * 2 + 1;
+    if (left >= heap.size())
+      break;
+    const auto right = left + 1;
+    const auto child = right < heap.size() && heap[right]->deadline < heap[left]->deadline ? right : left;
+    if (heap[index]->deadline <= heap[child]->deadline)
+      break;
+    swap(index, child);
+    index = child;
+  }
+}
+
+void detail::TimerQueue::insert(TimerRecord &timer)
+{
+  timer.index = heap.size();
+  heap.push_back(&timer);
+  repair(timer.index);
+}
+
+void detail::TimerQueue::remove(TimerRecord &timer) noexcept
+{
+  const auto index = timer.index;
+  require(index < heap.size() && heap[index] == &timer);
+  swap(index, heap.size() - 1);
+  heap.pop_back();
+  timer.index = std::numeric_limits<std::size_t>::max();
+  if (index < heap.size())
+    repair(index);
+}
+
+DWORD detail::TimerQueue::wait_time() noexcept
+{
+  std::lock_guard lock(mutex);
+  if (heap.empty())
+    return INFINITE;
+  const auto remaining = heap.front()->deadline - std::chrono::steady_clock::now();
+  if (remaining <= std::chrono::steady_clock::duration::zero())
+    return 0;
+  const auto milliseconds = std::chrono::ceil<std::chrono::milliseconds>(remaining).count();
+  return static_cast<DWORD>(std::min(milliseconds, static_cast<decltype(milliseconds)>(INFINITE - 1)));
+}
+
+bool detail::TimerQueue::dispatch_due() noexcept
+{
+  bool dispatched = false;
+  for (unsigned n = 0; n < 64; ++n) {
+    Posted *event;
+    Context *context;
+    {
+      std::lock_guard lock(mutex);
+      if (heap.empty() || heap.front()->deadline > std::chrono::steady_clock::now())
+        break;
+      auto *timer = heap.front();
+      event = &timer->event;
+      context = timer->context;
+      remove(*timer);
+    }
+    dispatched = true;
+    post(*context, *event);
+    // Publication can resume and destroy the timer on another worker.
+  }
+  return dispatched;
+}
+
+void detail::IoDomain::wake_waiters() noexcept
+{
+  std::lock_guard lock(waiters_mutex);
+  for (auto thread : waiters)
+    require(QueueUserAPC([](ULONG_PTR) {}, thread, 0) != 0);
+}
+
+void detail::IoAccess::start_timer(TimerRecord &timer)
+{
+  auto &context = *timer.context;
+  check_execution(context);
+  auto &queue = timers(context);
+  bool earliest;
+  {
+    std::lock_guard lock(queue.mutex);
+    earliest = queue.heap.empty() || timer.deadline < queue.heap.front()->deadline;
+    queue.insert(timer);
+  }
+  if (earliest) {
+    if (context.impl_->domain_)
+      context.impl_->domain_->wake_waiters();
+    else
+      ContextAccess::wake(context);
+  }
+}
+
+void detail::IoAccess::cancel_timer(TimerRecord &timer) noexcept
+{
+  auto &queue = timers(*timer.context);
+  Posted *event;
+  Context *context;
+  {
+    std::lock_guard lock(queue.mutex);
+    if (timer.index == std::numeric_limits<std::size_t>::max())
+      return;
+    queue.remove(timer);
+    timer.error = std::make_error_code(std::errc::operation_canceled);
+    event = &timer.event;
+    context = timer.context;
+  }
+  post(*context, *event);
+}
+
+detail::IoDomain::~IoDomain()
+{
+  require(timers.heap.empty() && waiters.empty());
+  if (port)
+    CloseHandle(port);
+}
+
+Result<std::shared_ptr<detail::IoDomain>> detail::ContextAccess::create_domain(
+  std::size_t concurrency,
+  TaskObserver collectors) noexcept
+{
+  auto domain = std::make_shared<IoDomain>();
+  domain->collectors = collectors;
+  domain->port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, nullptr, 0, static_cast<DWORD>(concurrency));
+  if (!domain->port)
+    return std::unexpected(win_error(GetLastError()));
+  return domain;
+}
+
+Result<Context> detail::ContextAccess::create(ContextOptions options, const std::shared_ptr<IoDomain> &domain) noexcept
+{
+  return IoAccess::create_context(options, &CreateIoCompletionPort, domain);
+}
+
+Result<Context> Context::create(ContextOptions options) noexcept
+{
+  return detail::IoAccess::create_context(options, &CreateIoCompletionPort);
+}
+
+Result<Context> detail::IoAccess::create_context(
+  ContextOptions options,
+  decltype(&CreateIoCompletionPort) create_port,
+  const std::shared_ptr<IoDomain> &domain) noexcept
+{
+  auto impl = std::unique_ptr<Context::Impl>{new (std::nothrow) Context::Impl};
+  require(impl != nullptr);
+  impl->options_ = options;
+  impl->domain_ = domain;
+  impl->port_ = domain ? domain->port : create_port(INVALID_HANDLE_VALUE, nullptr, 0, 1);
+  if (!impl->port_)
+    return std::unexpected(win_error(GetLastError()));
+
+  if (domain &&
+    !DuplicateHandle(
+      GetCurrentProcess(),
+      GetCurrentThread(),
+      GetCurrentProcess(),
+      &impl->thread_,
+      0,
+      FALSE,
+      DUPLICATE_SAME_ACCESS))
+    return std::unexpected(win_error(GetLastError()));
+
+  return Result<Context>{std::in_place, Context::CreateKey{}, std::move(impl)};
+}
+
+Context::Context(CreateKey, std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl))
+{
+  if (impl_->domain_) {
+    std::lock_guard lock(impl_->domain_->waiters_mutex);
+    impl_->domain_->waiters.push_back(impl_->thread_);
+  }
 }
 
 Context::~Context()
 {
   check_thread();
-  detail::require(!impl_->running_ && impl_->handles_ == 0 && impl_->metrics_.submitted == impl_->metrics_.completed);
-  if (impl_->port_)
+  detail::require(!impl_->running_);
+  shutdown();
+  detail::require(impl_->handles_ == 0 && impl_->metrics_.submitted == impl_->metrics_.completed);
+  detail::require(impl_->ready_first_ == nullptr);
+  detail::require(impl_->timers_.heap.empty());
+  if (impl_->thread_) {
+    std::lock_guard lock(impl_->domain_->waiters_mutex);
+    std::erase(impl_->domain_->waiters, impl_->thread_);
+    CloseHandle(impl_->thread_);
+  }
+  if (!impl_->domain_)
     CloseHandle(impl_->port_);
 }
 
-void Context::enter(bool managed, void *scheduler_group) noexcept
+void Context::enter(void *scheduler_group) noexcept
 {
   check_thread();
-  detail::require(!impl_->running_ && !impl_->error_ && !detail::current_context);
-  impl_->managed_ = managed;
+  detail::require(!impl_->running_ && !detail::current_context);
   impl_->scheduler_group_ = scheduler_group;
   impl_->running_ = true;
   detail::current_context = this;
+  if (stop_requested())
+    cancel_pending();
 }
 
 void Context::leave() noexcept
 {
   impl_->running_ = false;
+  detail::current_submission = nullptr;
   detail::current_context = nullptr;
 }
 
@@ -52,8 +249,95 @@ bool Context::stop_requested() const noexcept
   return impl_->stopping_.load(std::memory_order_acquire);
 }
 
+void Context::run()
+{
+  enter(nullptr);
+  while (!stop_requested() || impl_->active_.load(std::memory_order_acquire) != 0)
+    poll();
+  leave();
+}
+
+void Context::request_stop() noexcept
+{
+  bool wake;
+  {
+    std::lock_guard lock(impl_->submissions_);
+    impl_->closing_ = true;
+    wake = !impl_->stopping_.exchange(true, std::memory_order_acq_rel);
+  }
+  impl_->stop_source_.cancel();
+  if (wake)
+    detail::ContextAccess::wake(*this);
+}
+
+void Context::shutdown()
+{
+  check_thread();
+  detail::require(!impl_->running_);
+  request_stop();
+  if (impl_->active_.load(std::memory_order_acquire) != 0)
+    run();
+  else
+    cancel_pending();
+}
+
+Result<void> Context::submit(detail::SpawnBase &task)
+{
+  std::lock_guard lock(impl_->submissions_);
+  if (impl_->closing_)
+    return std::unexpected(std::make_error_code(std::errc::operation_canceled));
+
+  task.context = this;
+  task.on_finish = [](detail::SpawnBase *task) noexcept {
+    task->context->finished();
+    task->release_scheduled(task);
+  };
+  impl_->active_.fetch_add(1, std::memory_order_relaxed);
+  if (impl_->observer_.spawned)
+    impl_->observer_.spawned(impl_->observer_.state);
+  post(task.event);
+  return {};
+}
+
+void Context::finished() noexcept
+{
+  auto previous = impl_->active_.fetch_sub(1, std::memory_order_acq_rel);
+  detail::require(previous != 0);
+  if (impl_->observer_.finished)
+    impl_->observer_.finished(impl_->observer_.state);
+}
+
+void Context::close_submissions() noexcept
+{
+  std::lock_guard lock(impl_->submissions_);
+  impl_->closing_ = true;
+}
+
+void Context::observe(detail::TaskObserver observer) noexcept
+{
+  check_thread();
+  detail::require(!impl_->running_ && impl_->active_.load(std::memory_order_relaxed) == 0);
+  impl_->observer_ = observer;
+}
+
+void detail::post(Context &context, Posted &message) noexcept
+{
+  ContextAccess::post(context, message);
+}
+
+CancelToken detail::context_cancellation(Context &context) noexcept
+{
+  return IoAccess::state(context).stop_source_.token();
+}
+
 void detail::ContextAccess::wake(Context &context) noexcept
 {
+  if (context.impl_->domain_) {
+    // Alertable IOCP waits allow a targeted wake without a polling timeout or a second driver thread.
+    auto queued = QueueUserAPC([](ULONG_PTR) {}, context.impl_->thread_, 0);
+    require(queued != 0);
+    return;
+  }
   auto posted = PostQueuedCompletionStatus(context.impl_->port_, 0, wake_key, nullptr);
   require(posted != FALSE);
 }
@@ -69,7 +353,7 @@ void Context::check_thread() const noexcept
 
 void Context::count(u64 &counter, u64 amount) noexcept
 {
-  if (impl_->scheduler_group_)
+  if (impl_->scheduler_group_ || impl_->domain_)
     std::atomic_ref<u64>(counter).fetch_add(amount, std::memory_order_relaxed);
   else
     counter += amount;
@@ -77,7 +361,7 @@ void Context::count(u64 &counter, u64 amount) noexcept
 
 Context::Metrics Context::metrics() const noexcept
 {
-  if (!impl_->scheduler_group_)
+  if (!impl_->scheduler_group_ && !impl_->domain_)
     return impl_->metrics_;
 
   Metrics result;
@@ -105,14 +389,6 @@ Context::Metrics Context::metrics() const noexcept
   return result;
 }
 
-Result<void> Context::status() const noexcept
-{
-  if (impl_->error_)
-    return std::unexpected(impl_->error_);
-
-  return {};
-}
-
 Result<bool> detail::IoAccess::attach(Context &context, std::uintptr_t handle, bool skip_success)
 {
   context.check_thread();
@@ -121,8 +397,6 @@ Result<bool> detail::IoAccess::attach(Context &context, std::uintptr_t handle, b
   if (state.scheduler_group_)
     registry.lock();
 
-  if (state.error_)
-    return std::unexpected(state.error_);
   if (state.stopping_)
     return std::unexpected(win_error(ERROR_OPERATION_ABORTED));
 
@@ -139,8 +413,7 @@ Result<bool> detail::IoAccess::attach(Context &context, std::uintptr_t handle, b
   }
 
   ++state.handles_;
-  if (state.managed_)
-    state.managed_handles_.push_back(handle);
+  state.registered_handles_.push_back(handle);
   return skipping;
 }
 
@@ -159,12 +432,10 @@ Result<void> detail::IoAccess::close(
   if (auto error = close_native(handle))
     return std::unexpected(error);
 
-  if (state.managed_) {
-    auto found = std::find(state.managed_handles_.begin(), state.managed_handles_.end(), handle);
-    require(found != state.managed_handles_.end());
-    *found = state.managed_handles_.back();
-    state.managed_handles_.pop_back();
-  }
+  auto found = std::find(state.registered_handles_.begin(), state.registered_handles_.end(), handle);
+  require(found != state.registered_handles_.end());
+  *found = state.registered_handles_.back();
+  state.registered_handles_.pop_back();
 
   --state.handles_;
   return {};
@@ -177,11 +448,11 @@ void Context::cancel_pending() noexcept
   if (impl_->scheduler_group_)
     registry.lock();
 
-  if (impl_->stopping_)
+  if (impl_->cancelled_)
     return;
 
-  impl_->stopping_ = true;
-  for (auto socket : impl_->managed_handles_) {
+  impl_->cancelled_ = true;
+  for (auto socket : impl_->registered_handles_) {
     if (!CancelIoEx(reinterpret_cast<HANDLE>(socket), nullptr))
       detail::require(GetLastError() == ERROR_NOT_FOUND);
   }
@@ -194,11 +465,24 @@ void Context::post(detail::Posted &message) noexcept
     return;
   }
 
-  auto posted = PostQueuedCompletionStatus(
-    impl_->port_,
-    0,
-    detail::posted_key,
-    reinterpret_cast<OVERLAPPED *>(&message));
+  if (impl_->domain_) {
+    bool wake;
+    {
+      std::lock_guard lock(impl_->ready_mutex_);
+      wake = impl_->ready_first_ == nullptr;
+      message.next = nullptr;
+      if (impl_->ready_last_)
+        impl_->ready_last_->next = &message;
+      else
+        impl_->ready_first_ = &message;
+      impl_->ready_last_ = &message;
+    }
+    if (wake && impl_->owner_ != std::this_thread::get_id())
+      detail::ContextAccess::wake(*this);
+    return;
+  }
+
+  auto posted = PostQueuedCompletionStatus(impl_->port_, 0, posted_key, reinterpret_cast<OVERLAPPED *>(&message));
   detail::require(posted != FALSE);
 }
 
@@ -215,8 +499,35 @@ void Context::Yield::await_suspend(std::coroutine_handle<> continuation) noexcep
 
 void Context::poll(bool wait)
 {
+  if (stop_requested())
+    cancel_pending();
   impl_->inline_budget_ = 0;
   detail::inline_budget = 0;
+  const auto collectors = impl_->domain_ ? impl_->domain_->collectors : detail::TaskObserver{};
+  // Timer dispatch has the same cross-worker lifetime requirement as native completion dispatch.
+  if (collectors.spawned)
+    collectors.spawned(collectors.state);
+  bool dispatched = detail::IoAccess::timers(*this).dispatch_due();
+  if (collectors.finished)
+    collectors.finished(collectors.state);
+  if (impl_->domain_) {
+    for (unsigned n = 0; n < 64; ++n) {
+      detail::Posted *message;
+      {
+        std::lock_guard lock(impl_->ready_mutex_);
+        message = impl_->ready_first_;
+        if (!message)
+          break;
+        impl_->ready_first_ = message->next;
+        if (!impl_->ready_first_)
+          impl_->ready_last_ = nullptr;
+      }
+      dispatched = true;
+      const auto invoke = message->invoke;
+      auto *state = message->state;
+      invoke(state);
+    }
+  }
   ULONG count = 0;
   this->count(impl_->metrics_.dequeue_calls);
 #if defined(WEAVE_PROFILE_RUNTIME)
@@ -227,10 +538,11 @@ void Context::poll(bool wait)
     impl_->completions_.data(),
     static_cast<ULONG>(impl_->completions_.size()),
     &count,
-    wait ? INFINITE : 0,
-    FALSE);
+    wait && !dispatched ? detail::IoAccess::timers(*this).wait_time() : 0,
+    impl_->domain_ ? TRUE : FALSE);
   if (!dequeued) {
-    if (GetLastError() == WAIT_TIMEOUT)
+    const auto error = GetLastError();
+    if (error == WAIT_TIMEOUT || (impl_->domain_ && error == WAIT_IO_COMPLETION))
       return;
 
     // Port failure is a runtime invariant failure, not an individual I/O error.
@@ -244,12 +556,16 @@ void Context::poll(bool wait)
   static_assert(std::is_standard_layout_v<detail::Operation>);
   static_assert(offsetof(detail::Operation, overlapped) == 0);
 
+  // Keep all worker Contexts alive until cross-worker completion publication has unwound.
+  if (collectors.spawned)
+    collectors.spawned(collectors.state);
+
   for (ULONG i = 0; i < count; ++i) {
     const auto entry = impl_->completions_[i];
-    if (entry.lpCompletionKey == detail::wake_key)
+    if (entry.lpCompletionKey == wake_key)
       continue;
 
-    if (entry.lpCompletionKey == detail::posted_key) {
+    if (entry.lpCompletionKey == posted_key) {
       static_assert(std::is_standard_layout_v<detail::Posted>);
       auto *message = reinterpret_cast<detail::Posted *>(entry.lpOverlapped);
       const auto invoke = message->invoke;
@@ -262,14 +578,19 @@ void Context::poll(bool wait)
     detail::require(op != nullptr);
     op->transferred = entry.dwNumberOfBytesTransferred;
     op->failed = entry.Internal != 0;
-    this->count(impl_->metrics_.completed);
+    auto &owner = *op->context;
+    owner.count(owner.impl_->metrics_.completed);
 
     // Resumption may destroy this operation. Do not touch op afterward.
     if (op->event.executor)
       op->event.executor->schedule(op->event);
-    else
+    else if (&owner == this)
       op->event.invoke(op->event.state);
+    else
+      owner.post(op->event);
   }
+  if (collectors.finished)
+    collectors.finished(collectors.state);
 }
 
 } // namespace weave

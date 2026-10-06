@@ -12,27 +12,29 @@
 
 namespace weave {
 
-static Error win_error(int code)
+namespace {
+
+Error win_error(int code)
 {
   return {code, std::system_category()};
 }
 
-static Error last_error()
+Error last_error()
 {
   return win_error(WSAGetLastError());
 }
 
-static Error invalid()
+Error invalid()
 {
   return std::make_error_code(std::errc::invalid_argument);
 }
 
-static Error busy()
+Error busy()
 {
   return std::make_error_code(std::errc::operation_in_progress);
 }
 
-static Result<sockaddr_in> address(const char *ipv4, u16 port)
+Result<sockaddr_in> address(const char *ipv4, u16 port)
 {
   sockaddr_in result{};
   result.sin_family = AF_INET;
@@ -45,7 +47,7 @@ static Result<sockaddr_in> address(const char *ipv4, u16 port)
 }
 
 template <class T>
-static Result<T> extension(SOCKET socket, GUID id)
+Result<T> extension(SOCKET socket, GUID id)
 {
   T function = nullptr;
   DWORD bytes = 0;
@@ -67,8 +69,6 @@ static Result<T> extension(SOCKET socket, GUID id)
   return function;
 }
 
-namespace detail {
-
 struct TcpOperationFlag {
   bool &value;
 
@@ -82,8 +82,6 @@ struct TcpOperationFlag {
     value = false;
   }
 };
-
-} // namespace detail
 
 struct TcpIoAwaiter {
   enum Kind {
@@ -103,6 +101,20 @@ struct TcpIoAwaiter {
   LPFN_ACCEPTEX accept_fn = nullptr;
   LPFN_CONNECTEX connect_fn = nullptr;
   std::array<std::byte, 2 * (sizeof(sockaddr_in) + 16)> addresses{};
+  CancelToken cancellation;
+
+  struct CancelOperation {
+    HANDLE socket;
+    OVERLAPPED *operation;
+
+    void operator()() const noexcept
+    {
+      if (!CancelIoEx(socket, operation))
+        detail::require(GetLastError() == ERROR_NOT_FOUND);
+    }
+  };
+
+  std::optional<std::stop_callback<CancelOperation>> cancellation_callback;
 
   TcpIoAwaiter(Kind k, Context &c, SOCKET s, bool skip) : kind(k), ctx(c), skip_success(skip), socket(s)
   {
@@ -113,10 +125,16 @@ struct TcpIoAwaiter {
     return false;
   }
 
-  bool await_suspend(std::coroutine_handle<> continuation) noexcept
+  template <class P>
+  bool await_suspend(std::coroutine_handle<P> continuation) noexcept
   {
-    detail::IoAccess::check_thread(ctx);
+    detail::IoAccess::check_execution(ctx);
     auto &io = detail::IoAccess::state(ctx);
+    cancellation = continuation.promise().cancellation;
+    if (cancellation.stop_requested()) {
+      operation.error = std::make_error_code(std::errc::operation_canceled);
+      return false;
+    }
 
     // Exclude shutdown cancellation until the operation has been submitted.
     std::shared_lock submission(io.io_mutex_, std::defer_lock);
@@ -132,6 +150,7 @@ struct TcpIoAwaiter {
     operation.event.state = continuation.address();
     operation.event.invoke = [](void *state) noexcept { std::coroutine_handle<>::from_address(state).resume(); };
     operation.event.executor = detail::current_executor;
+    operation.context = &ctx;
 
     DWORD flags = 0;
     DWORD bytes = 0;
@@ -217,11 +236,18 @@ struct TcpIoAwaiter {
 
     // Without skip-success, synchronous success still queues an OS packet.
     detail::IoAccess::count(ctx, io.metrics_.submitted);
+    if (!(result == 0 && skip_success)) {
+      cancellation_callback.emplace(
+        cancellation.native_token(),
+        CancelOperation{reinterpret_cast<HANDLE>(socket), &operation.overlapped});
+    }
     return true;
   }
 
   Result<std::size_t> await_resume() noexcept
   {
+    // Wait for a racing CancelIoEx callback before releasing the native record/socket.
+    cancellation_callback.reset();
     // Keep the socket alive through error translation, before the awaiter's guard is released.
     if (operation.failed) {
       DWORD flags = 0, transferred = 0;
@@ -229,6 +255,8 @@ struct TcpIoAwaiter {
         operation.error = last_error();
     }
 
+    if (operation.error.value() == ERROR_OPERATION_ABORTED && (cancellation.stop_requested() || ctx.stop_requested()))
+      operation.error = std::make_error_code(std::errc::operation_canceled);
     if (operation.error)
       return std::unexpected(operation.error);
 #if defined(WEAVE_PROFILE_RUNTIME)
@@ -242,11 +270,9 @@ struct TcpIoAwaiter {
   }
 };
 
-static Result<SOCKET> make_socket(Context &context, bool &skip_success)
+Result<SOCKET> make_socket(Context &context, bool &skip_success)
 {
   detail::IoAccess::check_thread(context);
-  if (auto status = context.status(); !status)
-    return std::unexpected(status.error());
   if (context.stop_requested())
     return std::unexpected(win_error(ERROR_OPERATION_ABORTED));
 
@@ -283,7 +309,7 @@ static Result<SOCKET> make_socket(Context &context, bool &skip_success)
   return socket;
 }
 
-static Result<void> close_socket(Context &context, SOCKET socket)
+Result<void> close_socket(Context &context, SOCKET socket)
 {
   return detail::IoAccess::close(context, socket, [](std::uintptr_t handle) noexcept -> Error {
     if (closesocket(handle) != 0)
@@ -291,6 +317,25 @@ static Result<void> close_socket(Context &context, SOCKET socket)
     WSACleanup();
     return {};
   });
+}
+
+} // namespace
+
+Task<TcpListener> tcp::listen(const char *ipv4, u16 port, int backlog)
+{
+  auto *ctx = detail::current_context;
+  detail::require(ctx != nullptr);
+  auto listener = tcp::listen(*ctx, ipv4, port, backlog);
+  if (!listener)
+    co_await fail(listener.error());
+  co_return std::move(*listener);
+}
+
+Task<TcpStream> tcp::connect(const char *ipv4, u16 port)
+{
+  auto *ctx = detail::current_context;
+  detail::require(ctx != nullptr);
+  co_return co_await tcp::connect(*ctx, ipv4, port);
 }
 
 Result<TcpListener> tcp::listen(Context &context, const char *ipv4, u16 port, int backlog)
@@ -324,12 +369,18 @@ Result<TcpListener> tcp::listen(Context &context, const char *ipv4, u16 port, in
   if (listening != 0)
     return std::unexpected(last_error());
 
+  sockaddr_in local{};
+  int size = sizeof(local);
+  if (getsockname(*socket, reinterpret_cast<sockaddr *>(&local), &size) != 0)
+    return std::unexpected(last_error());
+  listener.port_ = ntohs(local.sin_port);
+
   return listener;
 }
 
 Task<TcpStream> tcp::connect(Context &context, const char *ipv4, u16 port)
 {
-  detail::IoAccess::check_thread(context);
+  detail::IoAccess::check_execution(context);
   auto endpoint = address(ipv4, port);
   if (!endpoint)
     co_return std::unexpected(endpoint.error());
@@ -433,7 +484,7 @@ Result<void> TcpStream::cancel()
 
 Task<std::size_t> TcpStream::read(std::span<std::byte> buffer)
 {
-  detail::IoAccess::check_thread(*ctx_);
+  detail::IoAccess::check_execution(*ctx_);
   if (reading_)
     co_return std::unexpected(busy());
 
@@ -443,25 +494,27 @@ Task<std::size_t> TcpStream::read(std::span<std::byte> buffer)
   if (buffer.empty())
     co_return std::size_t{0};
 
-  detail::TcpOperationFlag guard(reading_);
+  TcpOperationFlag guard(reading_);
   TcpIoAwaiter operation(TcpIoAwaiter::receive, *ctx_, socket_, skip_success_);
   operation.buffer.buf = reinterpret_cast<char *>(buffer.data());
   operation.buffer.len = static_cast<ULONG>((std::min)(buffer.size(), std::size_t{65536}));
 
   auto result = co_await operation;
-  co_return co_await std::move(result);
+  if (!result)
+    co_await fail(result.error());
+  co_return *result;
 }
 
 Task<void> TcpStream::read_exactly(std::span<std::byte> buffer)
 {
-  detail::IoAccess::check_thread(*ctx_);
+  detail::IoAccess::check_execution(*ctx_);
   if (reading_)
     co_await fail(busy());
 
   if (socket_ == INVALID_SOCKET)
     co_await fail(win_error(WSAENOTSOCK));
 
-  detail::TcpOperationFlag guard(reading_);
+  TcpOperationFlag guard(reading_);
   while (!buffer.empty()) {
     TcpIoAwaiter operation(TcpIoAwaiter::receive, *ctx_, socket_, skip_success_);
     operation.buffer.buf = reinterpret_cast<char *>(buffer.data());
@@ -480,14 +533,14 @@ Task<void> TcpStream::read_exactly(std::span<std::byte> buffer)
 
 Task<void> TcpStream::write_all(std::span<const std::byte> buffer)
 {
-  detail::IoAccess::check_thread(*ctx_);
+  detail::IoAccess::check_execution(*ctx_);
   if (writing_)
     co_await fail(busy());
 
   if (socket_ == INVALID_SOCKET)
     co_await fail(win_error(WSAENOTSOCK));
 
-  detail::TcpOperationFlag guard(writing_);
+  TcpOperationFlag guard(writing_);
   while (!buffer.empty()) {
     TcpIoAwaiter operation(TcpIoAwaiter::send, *ctx_, socket_, skip_success_);
     operation.buffer.buf = const_cast<char *>(reinterpret_cast<const char *>(buffer.data()));
@@ -508,6 +561,7 @@ TcpListener::TcpListener(TcpListener &&other) noexcept : ctx_(other.ctx_), socke
 {
   detail::require(!other.accepting_);
   socket_ = std::exchange(other.socket_, INVALID_SOCKET);
+  port_ = std::exchange(other.port_, u16{0});
   skip_success_ = other.skip_success_;
 }
 
@@ -531,16 +585,6 @@ Result<void> TcpListener::close()
   return {};
 }
 
-Result<u16> TcpListener::local_port() const
-{
-  detail::IoAccess::check_thread(*ctx_);
-  sockaddr_in endpoint{};
-  int size = sizeof(endpoint);
-  if (getsockname(socket_, reinterpret_cast<sockaddr *>(&endpoint), &size) != 0)
-    return std::unexpected(last_error());
-  return ntohs(endpoint.sin_port);
-}
-
 Result<void> TcpListener::cancel()
 {
   detail::IoAccess::check_thread(*ctx_);
@@ -554,13 +598,13 @@ Result<void> TcpListener::cancel()
   return {};
 }
 
-Task<TcpStream> TcpListener::accept()
+Task<TcpStream> TcpListener::accept(AcceptOptions options)
 {
-  detail::IoAccess::check_thread(*ctx_);
+  detail::IoAccess::check_execution(*ctx_);
   if (accepting_)
     co_return std::unexpected(busy());
 
-  detail::TcpOperationFlag guard(accepting_);
+  TcpOperationFlag guard(accepting_);
   auto function = extension<LPFN_ACCEPTEX>(socket_, WSAID_ACCEPTEX);
   if (!function)
     co_return std::unexpected(function.error());
@@ -587,6 +631,12 @@ Task<TcpStream> TcpListener::accept()
     sizeof(socket_));
   if (updated != 0)
     co_return std::unexpected(last_error());
+
+  if (options.no_delay) {
+    auto configured = stream.no_delay();
+    if (!configured)
+      co_return std::unexpected(configured.error());
+  }
 
   co_return std::move(stream);
 }

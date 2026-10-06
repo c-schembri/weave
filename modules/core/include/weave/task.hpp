@@ -1,6 +1,7 @@
 #pragma once
 
 #include <weave/core/detail/frame_allocator.hpp>
+#include <weave/cancellation.hpp>
 #include <array>
 #include <coroutine>
 #include <cstdlib>
@@ -9,6 +10,7 @@
 #include <concepts>
 #include <cstdio>
 #include <expected>
+#include <functional>
 #include <source_location>
 #include <system_error>
 #include <type_traits>
@@ -31,6 +33,11 @@ inline void require(bool condition, std::source_location location = std::source_
   }
 }
 
+template <class F>
+concept ErrorObserver = std::is_nothrow_move_constructible_v<F> && requires(F &observer, const Error &error) {
+  { std::invoke(observer, error) } noexcept -> std::same_as<void>;
+};
+
 struct Owner;
 struct TaskAccess;
 enum class State {
@@ -49,6 +56,8 @@ struct PromiseBase {
   void *completion_state = nullptr;
   Error error;
   State state = State::created;
+  CancelToken cancellation;
+  bool cancellation_bound = false;
 };
 
 inline std::coroutine_handle<> propagate(PromiseBase &origin, Error error) noexcept
@@ -112,9 +121,13 @@ struct Owner {
   }
 };
 
-template <class T>
-struct ResultAwaiter {
-  Result<T> result;
+struct FailureAwaiter {
+  // Tagged readiness avoids MSVC/ASan symmetric-transfer error C4737.
+  Result<void> result;
+
+  explicit FailureAwaiter(Error error) noexcept : result(std::unexpected(error))
+  {
+  }
 
   bool await_ready() const noexcept
   {
@@ -127,11 +140,28 @@ struct ResultAwaiter {
     return propagate(parent.promise(), result.error());
   }
 
-  T await_resume() noexcept
+  void await_resume() const noexcept
   {
     require(result.has_value());
-    if constexpr (!std::is_void_v<T>)
-      return std::move(*result);
+  }
+};
+
+struct CancellationAwaiter {
+  CancelToken token;
+
+  bool await_ready() const noexcept
+  {
+    return !token.stop_requested();
+  }
+
+  template <class P>
+  std::coroutine_handle<> await_suspend(std::coroutine_handle<P> parent) const noexcept
+  {
+    return propagate(parent.promise(), std::make_error_code(std::errc::operation_canceled));
+  }
+
+  void await_resume() const noexcept
+  {
   }
 };
 
@@ -220,11 +250,41 @@ struct Promise : Return<T> {
   template <class U>
   auto await_transform(Task<U> &&task) noexcept;
 
-  template <class U>
-  auto await_transform(Result<U> result) noexcept
+  auto await_transform(FailureAwaiter failure) noexcept
   {
-    return ResultAwaiter<U>{std::move(result)};
+    return failure;
   }
+
+  auto await_transform(CancellationPoint) noexcept
+  {
+    return CancellationAwaiter{this->cancellation};
+  }
+
+  struct TokenAwaiter {
+    CancelToken token;
+
+    bool await_ready() const noexcept
+    {
+      return true;
+    }
+
+    void await_suspend(std::coroutine_handle<>) const noexcept
+    {
+    }
+
+    CancelToken await_resume() const noexcept
+    {
+      return token;
+    }
+  };
+
+  auto await_transform(GetCancellation) noexcept
+  {
+    return TokenAwaiter{this->cancellation};
+  }
+
+  template <class U>
+  auto await_transform(Result<U>) noexcept = delete;
 
   template <class A>
   A &&await_transform(A &&awaiter) noexcept
@@ -259,6 +319,10 @@ public:
   Task(Task &&) noexcept = default;
   Task(const Task &) = delete;
   Task &operator=(const Task &) = delete;
+
+  // Observe failure without changing the result; consume and own the task and observer.
+  template <detail::ErrorObserver F>
+  Task on_error(F observer) && noexcept;
 };
 
 namespace detail {
@@ -310,6 +374,8 @@ public:
 
     if constexpr (std::derived_from<P, PromiseBase>) {
       parent_ = &parent.promise();
+      if (!promise.cancellation_bound)
+        promise.cancellation = parent_->cancellation;
 
       // Operand evaluation may defer one await_resume until another operand
       // has been awaited. Only an unfinished child would make that unsafe.
@@ -324,6 +390,8 @@ public:
       static_assert(Capture, "Use as_result() at a non-Task boundary");
     }
 
+    if (promise.cancellation.stop_requested())
+      return propagate(promise, std::make_error_code(std::errc::operation_canceled));
     return promise.self;
   }
 
@@ -376,6 +444,22 @@ auto Promise<T>::await_transform(Task<U> &&task) noexcept
 // Roots can fail at an ordinary await, so handle.done() is not a completion test.
 struct TaskAccess {
   template <class T>
+  static void bind(Task<T> &task, CancelToken token) noexcept
+  {
+    auto *promise = task.owner_.promise;
+    require(promise && promise->state == State::created);
+    promise->cancellation = std::move(token);
+    promise->cancellation_bound = true;
+  }
+
+  template <class T>
+  static void inherit(Task<T> &task, CancelToken token) noexcept
+  {
+    if (!task.owner_.promise->cancellation_bound)
+      task.owner_.promise->cancellation = std::move(token);
+  }
+
+  template <class T>
   static void start(
     Task<T> &task,
     void *state = nullptr,
@@ -387,7 +471,10 @@ struct TaskAccess {
     promise->state = State::running;
     promise->completion = completed;
     promise->completion_state = state;
-    promise->self.resume();
+    if (promise->cancellation.stop_requested())
+      propagate(*promise, std::make_error_code(std::errc::operation_canceled)).resume();
+    else
+      promise->self.resume();
   }
 
   template <class T>
@@ -396,6 +483,13 @@ struct TaskAccess {
     require(task.owner_.promise != nullptr);
     const auto state = task.owner_.promise->state;
     return state == State::succeeded || state == State::failed;
+  }
+
+  template <class T>
+  static bool failed(const Task<T> &task) noexcept
+  {
+    require(done(task));
+    return task.owner_.promise->state == State::failed;
   }
 
   template <class T>
@@ -421,9 +515,9 @@ struct TaskAccess {
 
 } // namespace detail
 
-inline Result<void> fail(Error error) noexcept
+inline auto fail(Error error) noexcept
 {
-  return std::unexpected(error);
+  return detail::FailureAwaiter{error};
 }
 
 inline auto fail(std::errc error) noexcept
@@ -438,6 +532,20 @@ auto as_result(Task<T> task) noexcept
 }
 
 namespace detail {
+
+template <class T, ErrorObserver F>
+Task<T> observe_error(Task<T> task, F observer)
+{
+  auto result = co_await as_result(std::move(task));
+  if (!result)
+    std::invoke(observer, std::as_const(result).error());
+
+  if (!result)
+    co_await fail(result.error());
+
+  if constexpr (!std::is_void_v<T>)
+    co_return std::move(*result);
+}
 
 template <std::size_t N>
 struct AllAwaiter {
@@ -458,11 +566,14 @@ struct AllAwaiter {
     return self.remaining == 0 && self.armed ? self.continuation : std::noop_coroutine();
   }
 
-  bool await_suspend(std::coroutine_handle<> caller) noexcept
+  template <class P>
+  bool await_suspend(std::coroutine_handle<P> caller) noexcept
   {
     continuation = caller;
-    for (auto &operation : operations)
+    for (auto &operation : operations) {
+      TaskAccess::inherit(operation, caller.promise().cancellation);
       TaskAccess::start(operation, this, complete);
+    }
 
     armed = true;
     return remaining != 0;
@@ -483,6 +594,15 @@ struct AllAwaiter {
 
 } // namespace detail
 
+template <class T>
+template <detail::ErrorObserver F>
+Task<T> Task<T>::on_error(F observer) && noexcept
+{
+  detail::require(owner_.promise && owner_.promise->state == detail::State::created);
+  // This entry point is not a coroutine: the adapter must not borrow a temporary Task's this pointer.
+  return detail::observe_error(std::move(*this), std::move(observer));
+}
+
 // Serialized join-all: drain every child before propagating the first error in
 // argument order. No implicit sibling cancellation or concurrent graph resumption.
 template <class... Operations>
@@ -490,7 +610,8 @@ template <class... Operations>
 Task<void> when_all(Operations... operations)
 {
   auto result = co_await detail::AllAwaiter<sizeof...(Operations)>{{std::move(operations)...}};
-  co_await std::move(result);
+  if (!result)
+    co_await fail(result.error());
 }
 
 } // namespace weave

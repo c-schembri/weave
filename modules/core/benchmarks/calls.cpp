@@ -37,13 +37,14 @@ static asio::awaitable<void> asio_calls(benchmark::State &state)
 
 static void WeaveCoroutine(benchmark::State &state)
 {
-  weave::Context ctx;
-  if (!ctx.status()) {
+  auto ctx = weave::Context::create();
+  if (!ctx) {
     state.SkipWithError("Context failed");
     return;
   }
-  bench::Profile profile(ctx);
-  if (!ctx.run(weave_calls(state)))
+
+  bench::Profile profile(*ctx);
+  if (!ctx->run(weave_calls(state)))
     state.SkipWithError("Call task failed");
   profile.report(state);
   state.SetItemsProcessed(state.iterations());

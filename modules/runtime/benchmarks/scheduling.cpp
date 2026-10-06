@@ -34,8 +34,8 @@ static asio::awaitable<weave::u64> asio_skew(weave::u64 seed, std::size_t worker
 static void weave_cpu_benchmark(benchmark::State &state, weave::Scheduler scheduler, bool skew = false)
 {
   const auto workers = static_cast<std::size_t>(state.range(0));
-  weave::Runtime runtime({.workers = workers, .scheduler = scheduler});
-  if (!runtime.status()) {
+  auto runtime = weave::Runtime::create({.workers = workers, .scheduler = scheduler});
+  if (!runtime) {
     state.SkipWithError("Runtime setup failed");
     return;
   }
@@ -46,7 +46,7 @@ static void weave_cpu_benchmark(benchmark::State &state, weave::Scheduler schedu
   jobs.reserve(jobs_per_batch);
   for (auto _ : state) {
     for (std::size_t i = 0; i < jobs_per_batch; ++i) {
-      auto job = runtime.spawn(
+      auto job = runtime->spawn(
         [seed = i + 1, workers, skew](weave::Context &) { return skew ? weave_skew(seed, workers) : weave_cpu(seed); });
       weave::detail::require(static_cast<bool>(job));
       jobs.push_back(std::move(*job));
@@ -64,7 +64,7 @@ static void weave_cpu_benchmark(benchmark::State &state, weave::Scheduler schedu
       break;
     }
   }
-  runtime.join();
+  runtime->join();
   state.SetItemsProcessed(state.iterations() * jobs_per_batch);
 }
 

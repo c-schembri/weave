@@ -53,18 +53,30 @@ immediate and delayed failures in Debug, Release, and MSVC AddressSanitizer.
 
 Socket operations return native `Task<T>`. The former coroutine implementation,
 native-operation adapter, derived Context, and runtime bridge have been removed.
-Context drives the root directly; Runtime owns the factory and root Task until
-completion, then destroys the failed/successful chain and factory before
-publishing `Result<T>` to a `JoinHandle<T>`.
+Context drives the root directly; Context and Runtime accept an owning Task or
+a factory taking no arguments or `Context &` and returning a Task by value.
+They own each root and any factory until completion, for both spawn and detach.
+They destroy the chain and factory before publishing `Result<T>` to a JoinHandle
+for spawn, or discarding the result on the completion thread for detach.
+
+Direct submission moves the lazy frame without a wrapper coroutine. Frame allocation
+and value-parameter construction happen when the coroutine is called, not when its
+body starts. Factories defer that construction to the execution thread. A rejected
+direct task is destroyed unstarted on the submitter. Neither form extends borrowed
+references. A Task does not own its originating coroutine-lambda closure: pass the
+callable itself or use a named coroutine with owned parameters instead of invoking
+a temporary capturing coroutine lambda and submitting its Task.
 
 `JoinHandle<T>::get()` returns `Result<T>`. Awaiting a handle inside a Task yields
 `T` or propagates its error; `as_result(handle)` permits recovery. A lazy Task
 adapter connects asynchronous joins to their owning executor. That adapter is
 not used by socket operations or synchronous joins.
 
-Awaiting a synchronous `Result<T>` uses the same policy: a value is ready; an
-error suspends the Task and routes failure. `co_await fail(ec)` is just an error
-Result. Non-void Tasks also accept `co_return std::unexpected(ec)`. A void promise
+Synchronous `Result<T>` values are not awaitable. Check them explicitly and use
+`co_await fail(result.error())` to propagate failure. `fail(ec)` is a dedicated
+failure-routing awaiter, not a Result adapter or asynchronous operation. It always
+bypasses the remaining coroutine body, even for a zero-valued error code.
+Non-void Tasks also accept `co_return std::unexpected(ec)`. A void promise
 uses `return_void`, so its explicit error-origin syntax is `co_await fail(ec)`
 rather than trying to combine `return_void` and `return_value` in one promise.
 
@@ -83,6 +95,46 @@ consume a Task through `as_result`, not raw `co_await Task<T>`.
 An explicit `try_` adapter would still need comparable completion/ownership
 machinery; changing syntax alone does not solve the hard parts.
 
+## Error observation
+
+`task.on_error(observer)` consumes a lazy `Task<T>` and returns a lazy `Task<T>`
+with the same result. Use a temporary task or `std::move(task)`:
+
+```cpp
+auto result = ctx->run(operation().on_error([](std::error_code error) noexcept {
+  WEAVE_LOG_ERROR("Operation: %s", error.message().c_str());
+}));
+```
+
+The observer runs once if the operation completes with an error, after the
+operation's coroutine frames have been reclaimed. Success is passed through
+without invoking it. The original error is still returned or propagated;
+observation does not recover. Use `as_result()` to recover explicitly.
+
+The adapter owns its task and observer, including move-only captures. The observer
+must return void, be callable without throwing, and have a non-throwing move
+constructor. Named functions and function objects work as well as lambdas; borrowed
+captures must still outlive execution. It runs synchronously on the task's resuming
+thread, not on a separate logging thread. Chained observers run inside-out.
+
+Cancellation is observed when it completes the operation with an error. An
+unstarted task destroyed without execution does not invoke its observer. A rejected
+spawn is a submission failure, not a task failure; check spawn's returned result.
+Discarding an accepted spawn's JoinHandle does not prevent observation. Neither
+does using detach instead of spawn.
+
+For detached work, prefer `ctx.detach(task_or_factory, on_error)` or the Runtime equivalent
+when submission failures also matter. These return void and invoke the optional
+handler on rejection as well as execution failure, without an extra Task wrapper.
+Without that handler, detach discards errors; a Task::on_error adapter inside an
+accepted task still works independently. It cannot observe submission rejection.
+
+The implementation adds one lazy wrapper coroutine using `as_result()`, then
+propagates the unchanged result. The member entry point is not itself a coroutine,
+so it does not retain a temporary Task object's `this` pointer. No scheduler hooks,
+Context/Runtime dependencies, forced destruction, or new cancellation policy are
+introduced. The adapter works with direct awaits, `run`, and either kind of spawn.
+
 ## Risks that the syntax hides
 
 - **Outstanding I/O:** suspension is not permission to free a buffer that IOCP
@@ -100,7 +152,9 @@ machinery; changing syntax alone does not solve the hard parts.
 - **Destruction versus unwinding:** ordinary RAII works, but there is no exception
   in flight. Exception-sensitive scope guards cannot detect this as failure;
   statements after a failed await, including asynchronous cleanup, do not run.
-  Async scope-exit support would require a separate design.
+  `weave::scope(body)` supplies a shielded child-drain boundary, not arbitrary
+  asynchronous scope-exit for every lexical block. See
+  [cancellation and scopes](cancellation.md) for its lifetime constraints.
 - **Scheduling:** the runtime serializes execution within each root. The model
   is tested under both schedulers but is not an independently
   thread-safe promise graph. Migrating a running coroutine, sharing Tasks, and
@@ -129,11 +183,10 @@ not resuming the normal body. [libunifex Task implementation](https://github.com
 Task is now the sole public coroutine model, selected for its ergonomics. This
 is an intentional breaking API change, not a claim that every performance bound
 was established: the final prototype gate retained two unresolved p99 checks.
-See the [historical prototype report](../benchmarks/results/2026-10-04-paired-ci-gate/README.md)
-and [concurrent validation](concurrent.md). The
-[native promotion run](../benchmarks/results/2026-10-04-task-promotion/README.md)
+See [concurrent validation](concurrent.md). An earlier native promotion run
 passed correctness and sanitizer tests, but failed six same-code performance
 controls and flagged two historical p99 regressions. It is not a parity pass.
+Raw benchmark artifacts are not bundled with the source checkout.
 Only Windows/MSVC is validated;
 Linux/io_uring and other compilers remain untested. Promotion does not change the
 pending-I/O, cancellation, or ownership contracts above.

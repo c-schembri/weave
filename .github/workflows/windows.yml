@@ -37,12 +37,17 @@ jobs:
             directory: build/asan
     defaults:
       run:
-        shell: pwsh
+        shell: cmd
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
 
       - name: Configure without benchmarks
         run: cmake --preset ${{ matrix.configure }} -DWEAVE_BUILD_BENCHMARKS=OFF
@@ -51,7 +56,7 @@ jobs:
         run: cmake --build --preset ${{ matrix.preset }} --parallel 4
 
       - name: Test
-        run: ctest --preset ${{ matrix.preset }} --label-exclude benchmark --no-tests=error --output-junit "$env:GITHUB_WORKSPACE/${{ matrix.directory }}/test-results.xml"
+        run: ctest --preset ${{ matrix.preset }} --label-exclude benchmark --no-tests=error --output-junit "%GITHUB_WORKSPACE%/${{ matrix.directory }}/test-results.xml"
 
       - name: Upload test reports
         if: always() && !cancelled()

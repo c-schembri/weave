@@ -1,5 +1,0 @@
-{
-    "protocol":  "weave2-ci-5m-v1",
-    "error":  "Worker did not produce a gate decision.",
-    "decision":  "invalid"
-}

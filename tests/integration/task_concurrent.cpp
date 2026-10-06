@@ -2,6 +2,7 @@
 #include <weave/tcp.hpp>
 #include <weave/runtime.hpp>
 #include "async_echo_peer.hpp"
+#include "runtime_fixture.hpp"
 
 namespace test_task_concurrent {
 
@@ -81,7 +82,8 @@ static weave::Task<void> echo_session(weave::Context &ctx, weave::u16 port, unsi
 {
   Guard guard{session};
   auto socket = co_await weave::tcp::connect(ctx, "127.0.0.1", port);
-  co_await socket.no_delay();
+  if (auto status = socket.no_delay(); !status)
+    co_await weave::fail(status.error());
   std::array<std::byte, 2048> tx{}, rx{};
   for (std::size_t i = 0; i < tx.size(); ++i)
     tx[i] = static_cast<std::byte>((id * 31 + i * 17) & 255);
@@ -96,8 +98,8 @@ static weave::Task<void> echo_session(weave::Context &ctx, weave::u16 port, unsi
       if (result || result.error() != std::errc::permission_denied)
         co_await weave::fail(std::errc::bad_message);
       ++session.recovered;
-    } else {
-      co_await std::move(result);
+    } else if (!result) {
+      co_await weave::fail(result.error());
     }
     co_await ctx.yield();
   }
@@ -117,7 +119,8 @@ static weave::Task<void> cancel_sibling(weave::Context &ctx, weave::TcpStream &s
 {
   for (int i = 0; i < 3; ++i)
     co_await ctx.yield();
-  co_await socket.cancel();
+  if (auto status = socket.cancel(); !status)
+    co_await weave::fail(status.error());
   co_await weave::fail(std::errc::io_error);
 }
 
@@ -139,7 +142,11 @@ static weave::Task<void> cancelled_session(
   session.resumed_after_failure = true;
 }
 
-TEST_CASE("1024 live connections recover nested failures under both schedulers")
+TEST_CASE_TEMPLATE(
+  "1024 live connections recover nested failures under both schedulers",
+  Layout,
+  support::ShardedIo,
+  support::SharedIo)
 {
   constexpr unsigned count = 1024;
   for (auto scheduler : {weave::Scheduler::worker_affine, weave::Scheduler::work_stealing}) {
@@ -148,11 +155,12 @@ TEST_CASE("1024 live connections recover nested failures under both schedulers")
       REQUIRE_FALSE(peer.error());
       std::vector<Session> sessions(count);
       Gate gate;
-      weave::Runtime runtime({.workers = 4, .scheduler = scheduler, .context = {.skip_successful_completions = skip}});
-      REQUIRE(runtime.status());
+      auto runtime = support::create_runtime<Layout>(
+        {.workers = 4, .scheduler = scheduler, .context = {.skip_successful_completions = skip}});
+      REQUIRE(runtime);
       std::vector<weave::JoinHandle<void>> jobs;
       for (unsigned i = 0; i < count; ++i) {
-        auto job = runtime.spawn([&, i](weave::Context &ctx) {
+        auto job = runtime->spawn([&, i](weave::Context &ctx) {
           return observe(echo_session(ctx, peer.port(i), i, sessions[i], gate), sessions[i], gate);
         });
         REQUIRE(job);
@@ -161,13 +169,13 @@ TEST_CASE("1024 live connections recover nested failures under both schedulers")
       const bool ready = wait_for([&] { return gate.ready == count || gate.finished != 0; }) && gate.ready == count;
       gate.open = true;
       if (!ready)
-        runtime.request_stop();
+        runtime->request_stop();
       const bool exchanged = ready && wait_for([&] { return gate.exchanged == count || gate.finished != 0; }) &&
         gate.exchanged == count;
       peer.stop();
       for (auto &job : jobs)
         REQUIRE(std::move(job).get());
-      runtime.join();
+      runtime->join();
       REQUIRE(ready);
       REQUIRE(exchanged);
       CHECK(gate.finished == count);
@@ -188,7 +196,11 @@ TEST_CASE("1024 live connections recover nested failures under both schedulers")
   }
 }
 
-TEST_CASE("Concurrent sibling failure retains borrowed buffers until cancelled IOCP reads drain")
+TEST_CASE_TEMPLATE(
+  "Concurrent sibling failure retains borrowed buffers until cancelled IOCP reads drain",
+  Layout,
+  support::ShardedIo,
+  support::SharedIo)
 {
   constexpr unsigned count = 256;
   for (auto scheduler : {weave::Scheduler::worker_affine, weave::Scheduler::work_stealing}) {
@@ -197,11 +209,12 @@ TEST_CASE("Concurrent sibling failure retains borrowed buffers until cancelled I
       REQUIRE_FALSE(peer.error());
       std::vector<Session> sessions(count);
       Gate gate;
-      weave::Runtime runtime({.workers = 4, .scheduler = scheduler, .context = {.skip_successful_completions = skip}});
-      REQUIRE(runtime.status());
+      auto runtime = support::create_runtime<Layout>(
+        {.workers = 4, .scheduler = scheduler, .context = {.skip_successful_completions = skip}});
+      REQUIRE(runtime);
       std::vector<weave::JoinHandle<void>> jobs;
       for (unsigned i = 0; i < count; ++i) {
-        auto job = runtime.spawn([&, i](weave::Context &ctx) {
+        auto job = runtime->spawn([&, i](weave::Context &ctx) {
           return observe(cancelled_session(ctx, peer.port(i), sessions[i], gate, true), sessions[i], gate);
         });
         REQUIRE(job);
@@ -209,7 +222,7 @@ TEST_CASE("Concurrent sibling failure retains borrowed buffers until cancelled I
       }
       for (auto &job : jobs)
         REQUIRE(std::move(job).get());
-      runtime.join();
+      runtime->join();
       CHECK(gate.finished == count);
       for (const auto &session : sessions) {
         CHECK(session.error.value() == ERROR_OPERATION_ABORTED);
@@ -224,7 +237,11 @@ TEST_CASE("Concurrent sibling failure retains borrowed buffers until cancelled I
   }
 }
 
-TEST_CASE("Multicore shutdown drains pending TCP reads even when half the join handles were dropped")
+TEST_CASE_TEMPLATE(
+  "Multicore shutdown drains pending TCP reads even when half the join handles were dropped",
+  Layout,
+  support::ShardedIo,
+  support::SharedIo)
 {
   constexpr unsigned count = 256;
   for (auto scheduler : {weave::Scheduler::worker_affine, weave::Scheduler::work_stealing}) {
@@ -233,12 +250,13 @@ TEST_CASE("Multicore shutdown drains pending TCP reads even when half the join h
       REQUIRE_FALSE(peer.error());
       std::vector<Session> sessions(count);
       Gate gate;
-      weave::Runtime runtime({.workers = 4, .scheduler = scheduler, .context = {.skip_successful_completions = skip}});
-      REQUIRE(runtime.status());
+      auto runtime = support::create_runtime<Layout>(
+        {.workers = 4, .scheduler = scheduler, .context = {.skip_successful_completions = skip}});
+      REQUIRE(runtime);
       std::array<std::array<weave::u64, 2>, 4> metrics{};
       std::vector<weave::JoinHandle<void>> inspectors;
       for (unsigned i = 0; i < metrics.size(); ++i) {
-        auto inspect = runtime.spawn_on(i, [&, i](weave::Context &ctx) -> weave::Task<void> {
+        auto inspect = runtime->spawn_on(i, [&, i](weave::Context &ctx) -> weave::Task<void> {
           while (gate.finished != count)
             co_await ctx.yield();
           metrics[i] = {ctx.metrics().submitted, ctx.metrics().completed};
@@ -248,7 +266,7 @@ TEST_CASE("Multicore shutdown drains pending TCP reads even when half the join h
       }
       std::vector<weave::JoinHandle<void>> jobs;
       for (unsigned i = 0; i < count; ++i) {
-        auto job = runtime.spawn([&, i](weave::Context &ctx) {
+        auto job = runtime->spawn([&, i](weave::Context &ctx) {
           return observe(cancelled_session(ctx, peer.port(i), sessions[i], gate, false), sessions[i], gate);
         });
         REQUIRE(job);
@@ -256,13 +274,13 @@ TEST_CASE("Multicore shutdown drains pending TCP reads even when half the join h
           jobs.push_back(std::move(*job));
       }
       const bool ready = wait_for([&] { return gate.ready == count || gate.finished != 0; }) && gate.ready == count;
-      runtime.shutdown();
+      runtime->shutdown();
       for (auto &job : jobs)
         REQUIRE(std::move(job).get());
       REQUIRE(ready);
       CHECK(gate.finished == count);
       for (const auto &session : sessions) {
-        CHECK(session.error.value() == ERROR_OPERATION_ABORTED);
+        CHECK(session.error == std::errc::operation_canceled);
         CHECK(session.observed);
         CHECK(session.live == 0);
         CHECK(session.destroyed == 2);

@@ -35,6 +35,11 @@ endif()
 
 if(WEAVE_BUILD_TESTS)
   enable_testing()
+  find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
+  foreach(script IN ITEMS automation gate gate_process tokio_benchmark)
+    add_test(NAME ${script}_tests COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/${script}.py")
+    set_tests_properties(${script}_tests PROPERTIES TIMEOUT 60 LABELS tooling)
+  endforeach()
   include(FetchContent)
   set(DOCTEST_NO_INSTALL ON CACHE BOOL "" FORCE)
   FetchContent_Declare(doctest GIT_REPOSITORY https://github.com/doctest/doctest.git
@@ -73,7 +78,9 @@ if(WEAVE_FULL_TESTS OR WEAVE_BUILD_BENCHMARKS)
 endif()
 if(WEAVE_FULL_TESTS)
   weave_add_test(weave_tests tests/integration/main.cpp tests/integration/runtime.cpp
-    tests/integration/task.cpp tests/integration/task_concurrent.cpp tests/benchmark_affinity.cpp)
+    tests/integration/task.cpp tests/integration/task_concurrent.cpp tests/integration/cancellation.cpp
+    tests/integration/serve.cpp
+    tests/benchmark_affinity.cpp)
   target_link_libraries(weave_tests PRIVATE weave::tcp weave::runtime)
   target_include_directories(weave_tests PRIVATE test_support)
   target_include_directories(weave_tests SYSTEM PRIVATE ${asio_SOURCE_DIR}/asio/include)

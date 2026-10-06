@@ -7,16 +7,29 @@ namespace weave {
 namespace tcp {
 
 Result<TcpListener> listen(Context &context, const char *ipv4, u16 port, int backlog = 0x7fffffff);
+// Lazy setup on the executing Context. ipv4 must remain alive until setup finishes.
+Task<TcpListener> listen(const char *ipv4, u16 port, int backlog = 0x7fffffff);
 
 } // namespace tcp
+
+struct AcceptOptions {
+  bool no_delay = false;
+};
 
 class TcpListener {
 public:
   TcpListener(TcpListener &&other) noexcept;
   TcpListener(const TcpListener &) = delete;
   ~TcpListener();
-  Task<TcpStream> accept();
-  Result<u16> local_port() const;
+  // Configure the accepted stream before returning it; setup errors fail the Task.
+  Task<TcpStream> accept(AcceptOptions options = {});
+
+  // Cached bound port, retained after close. A moved-from listener reports zero.
+  u16 local_port() const noexcept
+  {
+    return port_;
+  }
+
   Result<void> cancel();
   Result<void> close();
 
@@ -30,6 +43,7 @@ private:
 
   Context *ctx_;
   std::uintptr_t socket_;
+  u16 port_ = 0;
   bool accepting_ = false;
   bool skip_success_ = false;
 };

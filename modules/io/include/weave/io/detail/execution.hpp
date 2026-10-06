@@ -1,5 +1,7 @@
 #pragma once
 
+#include <weave/cancellation.hpp>
+
 namespace weave {
 
 class Context;
@@ -14,6 +16,15 @@ struct Posted {
   Context *target = nullptr;
   Executor *executor = nullptr;
   Posted *next = nullptr;
+};
+
+void post(Context &context, Posted &message) noexcept;
+CancelToken context_cancellation(Context &context) noexcept;
+
+struct TaskObserver {
+  void *state = nullptr;
+  void (*spawned)(void *) noexcept = nullptr;
+  void (*finished)(void *) noexcept = nullptr;
 };
 
 // IO routes a continuation without knowing the scheduler or owning the root task.
