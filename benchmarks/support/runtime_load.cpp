@@ -236,6 +236,25 @@ static void report_progress(
 
 int main(int argc, char **argv)
 {
+  if (argc == 4 && std::string_view{argv[1]} == "--scaling-cpu-masks") {
+    std::size_t server_cores = 0, client_cores = 0;
+    if (!bench::stress::number(argv[2], server_cores) || !bench::stress::number(argv[3], client_cores) ||
+      !server_cores || server_cores > 32 || !client_cores || client_cores > 32)
+      return 1;
+    const auto topology = experiment::cpu_topology();
+    if (!topology.allowed || topology.cores.empty())
+      return 1;
+    const auto available = std::count_if(topology.cores.begin(), topology.cores.end(), [&](const auto core) {
+      return (core & topology.allowed) != 0;
+    });
+    const auto masks = experiment::partition_scaling_cpus(topology.cores, topology.allowed, server_cores, client_cores);
+    std::printf(
+      "{\"client\":%llu,\"server\":%llu,\"available_physical_cores\":%zu}\n",
+      static_cast<unsigned long long>(masks.client),
+      static_cast<unsigned long long>(masks.peer),
+      static_cast<std::size_t>(available));
+    return 0;
+  }
   if (argc == 2 && (std::string_view{argv[1]} == "--cpu-masks" || std::string_view{argv[1]} == "--ci-cpu-masks")) {
     const auto masks = experiment::isolated_cpus(std::string_view{argv[1]} == "--ci-cpu-masks");
     if (!masks.client || !masks.peer)

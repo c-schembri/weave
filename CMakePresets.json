@@ -26,15 +26,15 @@
       }
     },
     {
-      "name": "windows-bench-ci",
-      "displayName": "Windows supplemental Weave/Asio/Tokio comparison",
+      "name": "windows-runtime-bench",
+      "displayName": "Windows local runtime scaling comparison",
       "inherits": "windows",
-      "binaryDir": "${sourceDir}/build/windows-bench-ci",
+      "binaryDir": "${sourceDir}/build/windows-runtime-bench",
       "cacheVariables": {
         "WEAVE_BUILD_TESTS": "OFF",
         "WEAVE_BUILD_EXAMPLES": "OFF",
         "WEAVE_BUILD_BENCHMARKS": "ON",
-        "WEAVE_BENCHMARK_SUITE": "ci",
+        "WEAVE_BENCHMARK_SUITE": "runtime",
         "WEAVE_ENABLE_ASAN": "OFF",
         "WEAVE_PROFILE_RUNTIME": "OFF"
       }
@@ -54,7 +54,7 @@
     {"name": "release", "configurePreset": "windows", "configuration": "Release"},
     {"name": "ci-debug", "configurePreset": "windows-ci", "configuration": "Debug"},
     {"name": "ci-release", "configurePreset": "windows-ci", "configuration": "Release"},
-    {"name": "bench-ci", "configurePreset": "windows-bench-ci", "configuration": "Release"},
+    {"name": "runtime-bench", "configurePreset": "windows-runtime-bench", "configuration": "Release"},
     {"name": "asan", "configurePreset": "asan", "configuration": "Release"}
   ],
   "testPresets": [

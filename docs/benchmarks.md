@@ -1,8 +1,8 @@
 # Benchmark methodology
 
-For the short, automatic Windows Weave/Asio/Tokio comparison and README publication,
-see the [CI benchmark protocol](ci-benchmarks.md). The broader suites below remain
-manual opt-ins; correctness CI does not run them.
+For the local Windows Weave/Asio/Tokio core-count sweep and published README results,
+see [runtime scaling](runtime-scaling.md). All measurement suites are manual opt-ins;
+correctness CI does not run them. Raw evidence is uploaded separately from source.
 
 The suite compares Weave and standalone Asio 1.36.0 with C++ coroutines,
 libuv 1.53.0 with its native TCP callbacks, and uSockets at `7a7c820` with

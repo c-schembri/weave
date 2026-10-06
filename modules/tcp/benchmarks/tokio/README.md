@@ -1,8 +1,8 @@
 # Four-worker runtime stress comparison
 
 This is the heavier, manually invoked four-worker Windows TCP server comparison.
-The same servers and load generator also support the smaller, separate
-[automatic CI profile](../../../../docs/ci-benchmarks.md).
+The same servers and load generator also support the separate
+[local runtime scaling sweep](../../../../docs/runtime-scaling.md).
 Weave, Tokio and the pinned Asio control have four I/O workers. An identical
 separate Asio client process uses eight workers. Four server cores and eight
 client cores are selected from different physical cores; no SMT core is shared.

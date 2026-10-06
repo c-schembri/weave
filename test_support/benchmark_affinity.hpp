@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <bit>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace experiment {
@@ -58,7 +59,41 @@ inline CpuPartition partition_ci_cpus(std::span<const DWORD_PTR> physical_cores,
   return result;
 }
 
-inline CpuPartition isolated_cpus(bool ci = false)
+inline CpuPartition partition_scaling_cpus(
+  std::span<const DWORD_PTR> physical_cores,
+  DWORD_PTR allowed,
+  std::size_t server_cores,
+  std::size_t client_cores)
+{
+  if (!server_cores || !client_cores)
+    return {};
+  std::vector<DWORD_PTR> selected;
+  DWORD_PTR seen = 0;
+  for (const auto core : physical_cores) {
+    if (!core || (seen & core))
+      return {};
+    seen |= core;
+    if (const auto available = core & allowed)
+      selected.push_back(DWORD_PTR{1} << std::countr_zero(available));
+  }
+  if (server_cores > selected.size() || client_cores > selected.size() - server_cores)
+    return {};
+
+  CpuPartition result;
+  for (std::size_t i = 0; i < server_cores; ++i)
+    result.peer |= selected[i];
+  // Keep the client cores fixed as the server's core count changes.
+  for (std::size_t i = selected.size() - client_cores; i < selected.size(); ++i)
+    result.client |= selected[i];
+  return result;
+}
+
+struct CpuTopology {
+  std::vector<DWORD_PTR> cores;
+  DWORD_PTR allowed = 0;
+};
+
+inline CpuTopology cpu_topology()
 {
   if (GetActiveProcessorGroupCount() != 1)
     return {};
@@ -77,7 +112,13 @@ inline CpuPartition isolated_cpus(bool ci = false)
       cores.push_back(entry.ProcessorMask);
   }
   std::sort(cores.begin(), cores.end());
-  return ci ? partition_ci_cpus(cores, allowed) : partition_cpus(cores, allowed);
+  return {std::move(cores), allowed};
+}
+
+inline CpuPartition isolated_cpus(bool ci = false)
+{
+  const auto topology = cpu_topology();
+  return ci ? partition_ci_cpus(topology.cores, topology.allowed) : partition_cpus(topology.cores, topology.allowed);
 }
 
 } // namespace experiment

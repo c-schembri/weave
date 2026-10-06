@@ -93,14 +93,16 @@
   changes need applicable builds and correctness tests, not timing runs or tables.
   Existing benchmark smoke tests validate correctness, not performance.
 - Correctness CI configures WEAVE_BUILD_BENCHMARKS=OFF and excludes benchmark
-  smokes. The separate Windows benchmark workflow runs only scripts/bench_ci.py's
-  fixed, sequential supplemental Weave/Asio/Tokio protocol on nightly/manual runs.
-  It is independent of correctness/release workflows, never a required PR check.
-  Use 21 five-second windows per backend/workload and a separate 35-minute
-  measurement deadline; the migration gate retains its five-minute deadline.
-  Publish complete main-branch summaries
-  in README; retain raw evidence as artifacts, and label noisy comparisons inconclusive
-  for the affected metric. Do not let p99 noise invalidate stable throughput results.
+  smokes. Do not run networking measurements on the undersized hosted Windows VM.
+  Run local Weave/Asio/Tokio runtime scaling with scripts/bench_scaling.py instead.
+  Request 1/2/4/8/16/32 server cores, one worker per physical core, with a fixed
+  separate client-core budget. Mark unsupported counts unavailable; never silently
+  oversubscribe workers or change client placement/budget to manufacture scaling.
+  Benchmark processes run sequentially, outside correctness/release pipelines.
+  Publish curated README results with hardware, sampling, and source provenance;
+  upload complete raw evidence as GitHub release assets, not tracked JSON/logs.
+  Label noisy comparisons inconclusive for the affected metric. P99 noise must
+  not invalidate stable throughput; client saturation is not proof of server capacity.
 - When benchmarking, compare against the pinned Asio baseline using the same
   workload and build. Report regressions and uncertainty. Do not claim wins from
   noisy single runs.
@@ -157,8 +159,8 @@
   descendant cleanup, evidence validation, fixed statistical protocol, and exit codes.
   Never overwrite archived benchmark evidence when testing or reanalyzing a migration.
 - Use unittest and synthetic evidence for tooling tests, registered with CTest.
-  These may run in correctness CI; measurements belong only to the dedicated
-  Windows benchmark workflow, and native benchmark smokes remain local opt-ins.
+  These may run in correctness CI; measurements and native benchmark smokes
+  remain local opt-ins, never required CI checks.
 
 ## Module boundaries
 

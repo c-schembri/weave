@@ -43,12 +43,12 @@ no native Windows header dependency.
 | --- | --- | --- |
 | `windows-ci` | `ci-debug`, `ci-release` | Correctness tests and examples; no benchmarks |
 | `asan` | `asan` | Release AddressSanitizer tests/examples; no benchmarks |
-| `windows-bench-ci` | `bench-ci` (build only) | Only native Weave/Asio servers and common client |
+| `windows-runtime-bench` | `runtime-bench` (build only) | Only native Weave/Asio runtime servers and common client |
 | `windows` | `debug`, `release` | Full tests, examples, comparisons and benchmark smokes |
 
 Tests, examples and benchmarks are separate opt-ins: `WEAVE_BUILD_TESTS`,
 `WEAVE_BUILD_EXAMPLES`, `WEAVE_BUILD_BENCHMARKS`. All default off for consumers.
-Benchmark builds select `WEAVE_BENCHMARK_SUITE=full` or `ci`; correctness presets
+Benchmark builds select `WEAVE_BENCHMARK_SUITE=full` or `runtime`; correctness presets
 never execute native benchmarks. Dependencies are pinned in CMake/Cargo.lock.
 
 ```sh
@@ -60,4 +60,4 @@ ctest --preset ci-debug
 For ASan, install the MSVC AddressSanitizer component. CTest supplies its runtime
 DLL path. Packaging tests cover isolated modules, relocated consumers, and every
 installed header. See [examples](../modules/tcp/examples/echo/README.md),
-[CI measurements](ci-benchmarks.md), and [manual benchmarks](benchmarks.md).
+[local runtime scaling](runtime-scaling.md), and [manual benchmarks](benchmarks.md).

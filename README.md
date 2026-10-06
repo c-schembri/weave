@@ -1,7 +1,6 @@
 # Weave
 
 [![Windows](https://github.com/c-schembri/weave/actions/workflows/windows.yml/badge.svg?branch=main)](https://github.com/c-schembri/weave/actions/workflows/windows.yml)
-[![Benchmarks](https://github.com/c-schembri/weave/actions/workflows/benchmarks-windows.yml/badge.svg?branch=main)](https://github.com/c-schembri/weave/actions/workflows/benchmarks-windows.yml)
 
 Async networking for C++23. Small APIs, explicit ownership, no exceptions.
 
@@ -135,41 +134,24 @@ Installed packages support `find_package(weave CONFIG REQUIRED COMPONENTS tcp)`.
 [Build and installation](docs/build.md) / [Module structure](docs/architecture.md) /
 [Context](docs/context.md) / [Runtime](docs/runtime.md) / [Roadmap](docs/roadmap.md).
 
-## Latest Windows Benchmarks
+## Local Runtime Benchmarks
 
-Supplemental benchmarks run sequentially each night or on manual dispatch;
-they never run as PR checks or block correctness CI. The last complete report
-remains below until a newer run finishes.
+We measure runtime scaling locally with 1/2/4/8/16/32 server cores where hardware
+permits, keeping client cores separate and fixed. Hosted CI runs correctness
+tests only; benchmark evidence is uploaded separately, not committed as raw files.
 
 <!-- benchmark-results:start -->
-Previous short protocol (`windows-tcp-ci-v1`); the longer supplemental run has not completed yet.
-
-Latest complete run: [`e0d7a0b`](https://github.com/c-schembri/weave/commit/e0d7a0bba7744937648f97a3fc9129c3a84b606a), 2026-10-06 05:56 +0000; [full results and raw evidence](https://github.com/c-schembri/weave/actions/runs/37420985804).
-
-Windows x64 / AMD EPYC 9V45 96-Core Processor; server/client workers: 1/1, on separate cores. 7 x 1s per library/workload. Median round trips/second; higher is better.
-
-| Workload | Weave | Asio | Tokio | Max throughput CV | Notes |
-| --- | ---: | ---: | ---: | ---: | --- |
-| 64 clients / 1 KiB | 197,676 | 208,359 | 178,704 | 4.4% | p99 noisy; client busy |
-| 1,024 clients / 1 KiB | 186,416 | 191,569 | 142,218 | 4.5% | p99 noisy; client busy |
-| 64 clients / 64 KiB | 61,134 | 62,652 | 89,143 | 6.5% | p99 noisy; client busy |
-| 256 clients / uneven CPU | 122,069 | 115,690 | 96,999 | 5.3% | p99 noisy |
-
-Throughput variation is within limits. **6 library/workload p99 measurements are noisy; tail-latency comparisons involving them are inconclusive.**
-
-Client busy: at least one backend's load generator used >=90% of its core budget. These are end-to-end loopback results, not maximum server capacity.
-
-CPU use, p99/p99.9 latency, paired confidence intervals, and limitations: [benchmark protocol](docs/ci-benchmarks.md).
+The first clean-source local scaling report is being collected. The earlier
+single-worker hosted results are not a four-core Runtime or scaling comparison.
 <!-- benchmark-results:end -->
 
-[CI protocol and limitations](docs/ci-benchmarks.md) /
-[Latest workflow runs](https://github.com/c-schembri/weave/actions/workflows/benchmarks-windows.yml) /
+[Scaling methodology](docs/runtime-scaling.md) /
 [Manual benchmark suites](docs/benchmarks.md).
 
 ## Development
 
 Windows correctness CI runs MSVC Debug, Release, and AddressSanitizer tests;
-performance comparisons run in a separate nightly/manual workflow. Raw benchmark results
-are artifacts, not tracked source files. [Development rules](AGENTS.md).
+performance comparisons run locally on suitable hardware. Raw benchmark results
+are uploaded assets, not tracked source files. [Development rules](AGENTS.md).
 
 No project license has been selected yet. Third-party dependencies retain their own licenses.

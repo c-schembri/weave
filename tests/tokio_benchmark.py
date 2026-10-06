@@ -28,8 +28,8 @@ def sample(workload, backend, repetition, factor=1.0):
 
 
 class EvidenceTests(unittest.TestCase):
-    def test_ci_worker_and_timed_warmup_options_reach_the_native_processes(self):
-        for workers in (1, 2):
+    def test_worker_and_timed_warmup_options_reach_the_native_processes(self):
+        for workers in (1, 2, 4, 8, 16, 32):
             with self.subTest(workers=workers), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 server, client = Mock(), Mock()
