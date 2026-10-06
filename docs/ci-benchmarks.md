@@ -1,20 +1,28 @@
 # Windows CI benchmarks
 
 [Workflow](../.github/workflows/benchmarks-windows.yml) compares Weave, standalone
-Asio 1.36.0 and Tokio 1.53.2 on code pushes to `main`, pull requests, and manual
-dispatch. README/doc-only changes skip measurements. The separate correctness
-workflow still runs Debug, Release and ASan without native benchmark execution.
+Asio 1.36.0 and Tokio 1.53.2 as **supplemental** evidence. It runs nightly at
+03:17 UTC or by manual dispatch, never on pushes or pull requests. Correctness
+CI still runs Debug, Release and ASan immediately and independently, without
+native benchmarks. No build, test, or release job depends on this workflow;
+do not configure its jobs as required branch-protection checks.
 Linux measurements will follow its backend implementation.
 
-## Fixed, short matrix
+## Sequential Matrix
 
-Protocol: `windows-tcp-ci-v1`. Each case runs **seven one-second windows** for
-each library: **84 seconds of timed work** total. Startup, per-connection warmup,
-sorting, reporting, and cleanup add overhead. The measurement supervisor owns
-every descendant in a Windows Job and enforces a **300-second hard wall-clock
-limit**, including startup and cleanup. Configure/build and publication are
-separate; a cold dependency/toolchain build is not promised to fit five minutes.
-The benchmark job has a 12-minute outer limit. Dependency caches reduce warm builds.
+Protocol: `windows-tcp-supplemental-v2`. Each case runs **21 five-second windows**
+for each library: **252 samples and 21 minutes of timed work** total. Only one
+server and its common client run at a time. A server/client pair is completely
+cleaned up before the next library starts. Backend order is randomized within
+matched repetition blocks, not all Weave samples followed by all Asio samples.
+
+Startup, one-second per-connection warmup, sorting, reporting, and cleanup add
+overhead; expect roughly 25-30 minutes of measurement work. The measurement
+supervisor owns every descendant in a Windows Job and enforces a **35-minute
+hard wall-clock limit**, including startup and cleanup. Configure/build and
+publication are separate. The benchmark job has a 45-minute outer limit.
+Dependency caches reduce warm builds. The separate migration gate still has
+its five-minute deadline; the longer profile is not a required CI gate.
 
 | Case | Connections | Request/response | CPU work |
 | --- | ---: | ---: | --- |
@@ -47,13 +55,13 @@ budget; these results are not the manual four-worker/12-core profile.
   the same payload validation, workers, socket settings and latency collection.
   Every returned frame is checked. Every connection must progress during measurement.
 - Loopback IPv4, persistent connections, TCP_NODELAY, native backlog hint 8,192.
-  All connections complete eight warmup exchanges plus 250 ms of validated,
+  All connections complete eight warmup exchanges plus one second of validated,
   untimed traffic per connection before GO. Establishment,
   warmup, latency sorting and teardown are outside the timed window. A new server
   and client process are used for each sample; no language has a JIT warmup advantage.
 - Fixed-seed randomized workload/backend order within complete matched repetition
-  blocks reduces ordering bias. All 84 samples are required; duplicates, missing
-  cases, invalid counters, stalled connections or windows exceeding two seconds
+  blocks reduces ordering bias. All 252 samples are required; duplicates, missing
+  cases, invalid counters, stalled connections or windows exceeding six seconds
   fail the run. Partial evidence is retained, never published as complete results.
 
 ## Variance And Interpretation
@@ -66,7 +74,8 @@ Latency summaries are medians of per-window percentiles, not pooled percentiles.
 
 Weave/Asio and Weave/Tokio throughput ratios pair samples by repetition. A
 fixed-seed, 20,000-resample whole-block bootstrap supplies a **90% interval** for
-the median ratio. Seven repetitions are a bounded diagnostic sample, not proof
+the median ratio. The 21 repetitions improve precision over the previous seven
+one-second windows, but remain a bounded diagnostic sample, not proof
 of tiny regressions or a simultaneous confidence guarantee for the full matrix.
 An interval including 1 does not establish a throughput winner.
 
@@ -76,31 +85,41 @@ noise separately from p99 noise: noisy comparisons are inconclusive for the
 affected metric and library/workload, not every measurement in the run. A p99
 warning does not invalidate otherwise stable throughput. We retain and publish every sample,
 including outliers, with **no adaptive stopping, automatic reruns, or cherry-picked
-best runs**. Noise is not a correctness failure and does not fail a PR. Protocol,
-payload, process, or deadline failures do fail it. This workflow is a comparison
+best runs**. Noise is not a correctness failure. Protocol, payload, process, or
+deadline failures fail this supplemental workflow visibly, retain diagnostics,
+and leave the last complete README report untouched. They do not fail or delay
+the independent correctness pipeline. This workflow is a comparison
 dashboard, not a before/after non-regression gate; a new VM is not a controlled
 historical baseline.
 
 Hosted-runner contention, clock changes, and the common client's capacity can
 limit precision. Client CPU occupancy >=90% of its core budget is flagged; absence
-of that flag does not prove an unlimited client. Windows GetProcessTimes can be
+of that flag does not prove an unlimited client. A client-busy comparison is
+end-to-end throughput, not evidence of maximum server capacity. Longer runs do
+not remove that ceiling or turn a one-worker VM into a multicore benchmark.
+Use the manual four-server/eight-client-core profile on a suitable machine for
+capacity and scaling investigations. Windows GetProcessTimes can be
 quantized, including zero deltas; CPU seconds remain diagnostic, and measured
 cycles are never converted to seconds. These closed-loop tests have one outstanding
 request per connection and no coordinated-omission correction. They do not measure
 open-loop arrival latency, internet performance, connection setup, cancellation,
-or TLS/HTTP. No short CI benchmark can eliminate all host variance.
+or TLS/HTTP. No run length can eliminate all host variance.
 
 ## Latest Results
 
 Each complete main run updates only the marked benchmark block in README, with
 its source revision, timestamp, workload medians, variance warning, and workflow
 link. No hand-entered or synthetic results are advertised as measured CI evidence.
-PR runs publish job summaries and artifacts only, with read-only permissions.
 Publication is a separate trusted-main-only job with `contents: write`; it validates
 the complete sample matrix again, rejects dirty/stale source revisions, and uses a
 normal fast-forward push. It never executes PR code with a write token. Branch
 protection must permit the bot to update README; otherwise that step fails visibly
 and the complete results remain available in Actions.
+
+The previous `windows-tcp-ci-v1` reports used seven one-second windows and a
+five-minute supervisor limit. They remain historical evidence, not samples of
+the new longer protocol. Source revisions and sampling windows identify the
+profile; never silently relabel old measurements as a fresh long run.
 
 The [repository GITHUB_TOKEN does not recursively trigger workflows on its push](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
 Benchmark outputs and logs remain ignored under `benchmarks/results/` and are

@@ -1,12 +1,8 @@
 name: Windows benchmarks
 
 on:
-  push:
-    branches: [main]
-    paths-ignore: ['README.md', 'docs/**', 'AGENTS.md', '**/README.md']
-  pull_request:
-    branches: [main]
-    paths-ignore: ['README.md', 'docs/**', 'AGENTS.md', '**/README.md']
+  schedule:
+    - cron: '17 3 * * *'
   workflow_dispatch:
 
 permissions:
@@ -18,9 +14,9 @@ concurrency:
 
 jobs:
   benchmark:
-    name: Weave / Asio / Tokio
+    name: Supplemental Weave / Asio / Tokio
     runs-on: windows-2022
-    timeout-minutes: 12
+    timeout-minutes: 45
     defaults:
       run:
         shell: cmd
@@ -58,7 +54,7 @@ jobs:
       - name: Build Tokio server
         run: rustup run 1.94.0 cargo build --release --locked --manifest-path modules/tcp/benchmarks/tokio/Cargo.toml --target-dir build/tokio-ci
 
-      - name: Run fixed paired benchmark (five-minute hard limit)
+      - name: Run sequential paired benchmarks (35-minute hard limit)
         run: python scripts/bench_ci.py run --output-directory benchmarks/results/ci
 
       - name: Upload results and failure diagnostics
@@ -73,7 +69,7 @@ jobs:
   publish:
     name: Update latest README results
     needs: benchmark
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     runs-on: windows-2022
     timeout-minutes: 3
     permissions:

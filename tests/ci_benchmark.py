@@ -4,10 +4,12 @@ from collections import Counter
 from contextlib import redirect_stdout
 import copy
 import io
+import json
 import os
 from pathlib import Path
 import sys
 import tempfile
+import threading
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -23,7 +25,7 @@ def evidence():
                 "cpu_masks": {"server": 5, "client": 10}, "workers": 2, "client_workers": 2,
                 "revision": "a" * 40, "worktree": [], "timestamp": "2026-10-06T12:00:00+11:00",
                 "cpu": [{"Name": "Synthetic CPU", "NumberOfCores": 4, "NumberOfLogicalProcessors": 8}],
-                "repository": "c-schembri/weave", "run_id": "123", "elapsed_seconds": 115.0}
+                "repository": "c-schembri/weave", "run_id": "123", "elapsed_seconds": 1700.0}
     samples = []
     for repetition, workload, backend in bench_ci.schedule():
         name, connections, size, work, uneven = workload
@@ -32,8 +34,8 @@ def evidence():
         sample.update({"workload": name, "backend": backend, "repetition": repetition,
                        "connections": connections, "bytes": size, "cpu_iterations": work, "uneven": uneven,
                        "server_workers": 2, "samples": count, "min_connection_samples": 1,
-                       "max_connection_samples": 4000, "wall_seconds": 1.01,
-                       "roundtrips_per_second": count / 1.01, "client_cycles_per_op": 100,
+                       "max_connection_samples": 4000, "wall_seconds": 5.01,
+                       "roundtrips_per_second": count / 5.01, "client_cycles_per_op": 100,
                        "p50_us": 10, "p95_us": 20, "p99_us": 30, "p999_us": 40, "max_us": 100})
         samples.append(sample)
     return samples, metadata
@@ -43,15 +45,58 @@ class ProtocolTests(unittest.TestCase):
     def test_schedule_is_fixed_complete_and_matched(self):
         cases = list(bench_ci.schedule())
         self.assertEqual(cases, list(bench_ci.schedule()))
-        self.assertEqual(len(cases), 84)
-        self.assertEqual(len(set(cases)), 84)
-        for repetition in range(7):
+        self.assertEqual(len(cases), 252)
+        self.assertEqual(len(set(cases)), 252)
+        for repetition in range(21):
             counts = Counter((workload[0], backend) for index, workload, backend in cases if index == repetition)
             self.assertEqual(set(counts.values()), {1})
             self.assertEqual(len(counts), 12)
-        self.assertEqual(bench_ci.TIMEOUT_MS, 300000)
-        self.assertEqual(bench_ci.DURATION_MS, 1000)
-        self.assertEqual(bench_ci.WARMUP_MS, 250)
+        self.assertEqual(bench_ci.TIMEOUT_MS, 2100000)
+        self.assertEqual(bench_ci.DURATION_MS, 5000)
+        self.assertEqual(bench_ci.WARMUP_MS, 1000)
+        self.assertEqual(len(cases) * bench_ci.DURATION_MS, 21 * 60 * 1000)
+
+    def test_worker_measures_serially_and_failure_cannot_publish_partial_evidence(self):
+        samples, metadata = evidence()
+        cases = list(bench_ci.schedule())
+        thread = threading.get_ident()
+        for failure_at in (None, 4):
+            with self.subTest(failure_at=failure_at), tempfile.TemporaryDirectory() as temporary:
+                args = SimpleNamespace(load_binary="synthetic-load", output_directory=Path(temporary))
+                calls = []
+
+                def measure(arguments, backend, workload, repetition, masks):
+                    self.assertEqual(threading.get_ident(), thread)
+                    self.assertEqual((repetition, workload, backend), cases[len(calls)])
+                    self.assertEqual((arguments.duration_ms, arguments.warmup_ms), (5000, 1000))
+                    self.assertEqual(masks, metadata["cpu_masks"])
+                    calls.append((repetition, workload, backend))
+                    if len(calls) == failure_at:
+                        raise ValueError("Synthetic setup failure")
+                    return samples[len(calls) - 1]
+
+                with patch.object(bench_ci, "capture", return_value=json.dumps(metadata["cpu_masks"])), \
+                        patch.object(bench_ci, "read_json", return_value=copy.deepcopy(metadata)), \
+                        patch.object(bench_ci, "measure", side_effect=measure), \
+                        patch.object(bench_ci, "write_json") as write, \
+                        patch.object(bench_ci, "report", wraps=bench_ci.report) as report, \
+                        redirect_stdout(io.StringIO()):
+                    if failure_at:
+                        with self.assertRaisesRegex(ValueError, "Synthetic setup failure"):
+                            bench_ci.worker(args)
+                    else:
+                        bench_ci.worker(args)
+                outputs = [call.args[0].name for call in write.call_args_list]
+                if failure_at:
+                    self.assertEqual(len(calls), failure_at)
+                    self.assertNotIn("publication.json", outputs)
+                    self.assertFalse((args.output_directory / "summary.md").exists())
+                    report.assert_not_called()
+                else:
+                    self.assertEqual(calls, cases)
+                    self.assertIn("publication.json", outputs)
+                    self.assertTrue((args.output_directory / "summary.md").exists())
+                    report.assert_called_once()
 
     def test_cpu_budgets_reject_overlapping_oversubscribed_or_invalid_masks(self):
         self.assertEqual(bench_ci.validate_masks({"server": 1, "client": 2}), 1)
@@ -78,20 +123,21 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn("90% whole-block", markdown)
         self.assertIn("Server CPU us/op", markdown)
         self.assertIn("p99.9 ms", markdown)
-        self.assertIn("300s", markdown)
+        self.assertIn("2100s", markdown)
+        self.assertIn("Sequential 21 x 5s", markdown)
         self.assertIn("actions/runs/123", markdown)
         self.assertIn("Synthetic CPU", markdown)
         self.assertIn("server/client workers: 2/2", markdown)
 
     def test_noisy_measurements_are_retained_not_filtered(self):
         samples, metadata = evidence()
-        samples[0].update(samples=200000, roundtrips_per_second=200000 / 1.01)
+        samples[0].update(samples=200000, roundtrips_per_second=200000 / 5.01)
         result = bench_ci.report(samples, metadata)
         self.assertTrue(result["noisy"])
         self.assertTrue(result["throughput_noisy"])
         self.assertFalse(result["p99_noisy"])
         first = next(row for row in result["rows"] if row["backend"] == "weave" and row["workload"] == "64-small")
-        self.assertEqual(first["metrics"]["roundtrips_per_second"]["max"], 200000 / 1.01)
+        self.assertEqual(first["metrics"]["roundtrips_per_second"]["max"], 200000 / 5.01)
         self.assertIn("inconclusive", bench_ci.compact_markdown(result, metadata))
 
     def test_tail_variance_and_client_limits_are_not_hidden_by_stable_throughput(self):
@@ -116,14 +162,16 @@ class ProtocolTests(unittest.TestCase):
         samples, metadata = evidence()
         mutations = (samples[:-1], samples + [samples[0]],
                      [dict(samples[0], bytes=65536), *samples[1:]],
-                     [dict(samples[0], wall_seconds=2.001), *samples[1:]],
+                     [dict(samples[0], wall_seconds=6.001), *samples[1:]],
+                     [dict(samples[0], wall_seconds=1.01), *samples[1:]],
                      [dict(samples[0], min_connection_samples=0), *samples[1:]],
                      [dict(samples[0], server_workers=1), *samples[1:]])
         for changed in mutations:
             with self.subTest(change=changed[0]), self.assertRaises(ValueError):
                 bench_ci.report(changed, metadata)
         for changed in ({"warmup_ms": 0}, {"duration_ms": 100}, {"repetitions": 1},
-                        {"seed": 1}, {"workers": 1}, {"revision": "not a revision"}):
+                        {"seed": 1}, {"workers": 1}, {"revision": "not a revision"},
+                        {"protocol": "windows-tcp-ci-v1"}):
             with self.subTest(metadata=changed), self.assertRaises(ValueError):
                 bench_ci.report(samples, dict(metadata, **changed))
 
@@ -142,12 +190,13 @@ class PublicationTests(unittest.TestCase):
         samples, metadata = evidence()
         self.publication = {"samples": samples, "metadata": metadata}
         self.environment = {"GITHUB_REPOSITORY": "c-schembri/weave", "GITHUB_REF": "refs/heads/main",
-                            "GITHUB_EVENT_NAME": "push", "GITHUB_SHA": metadata["revision"], "GITHUB_RUN_ID": "123"}
+                            "GITHUB_EVENT_NAME": "schedule", "GITHUB_SHA": metadata["revision"], "GITHUB_RUN_ID": "123"}
         self.args = SimpleNamespace(report=Path("synthetic-publication.json"))
 
     def test_forks_pull_requests_other_refs_and_local_invocations_cannot_publish(self):
         changes = ({"GITHUB_REPOSITORY": "fork/weave"}, {"GITHUB_REF": "refs/pull/1/merge"},
                    {"GITHUB_EVENT_NAME": "pull_request"}, {"GITHUB_EVENT_NAME": "pull_request_target"},
+                   {"GITHUB_EVENT_NAME": "push"},
                    {"GITHUB_REF": "refs/heads/feature"})
         for change in changes:
             with self.subTest(change=change), patch.dict(os.environ, dict(self.environment, **change), clear=True), \
@@ -169,13 +218,15 @@ class PublicationTests(unittest.TestCase):
             run.assert_not_called()
 
     def test_advanced_main_is_skipped_without_writes_or_git_mutations(self):
-        with patch.dict(os.environ, self.environment, clear=True), \
-                patch.object(bench_ci, "read_json", return_value=self.publication), \
-                patch.object(bench_ci, "capture", side_effect=["", "b" * 40]), \
-                patch.object(bench_ci, "run") as run, redirect_stdout(io.StringIO()) as output:
-            bench_ci.publish(self.args)
-        run.assert_not_called()
-        self.assertIn("stale", output.getvalue())
+        for event in ("schedule", "workflow_dispatch"):
+            environment = dict(self.environment, GITHUB_EVENT_NAME=event)
+            with self.subTest(event=event), patch.dict(os.environ, environment, clear=True), \
+                    patch.object(bench_ci, "read_json", return_value=self.publication), \
+                    patch.object(bench_ci, "capture", side_effect=["", "b" * 40]), \
+                    patch.object(bench_ci, "run") as run, redirect_stdout(io.StringIO()) as output:
+                bench_ci.publish(self.args)
+            run.assert_not_called()
+            self.assertIn("stale", output.getvalue())
 
     def test_current_clean_main_updates_only_readme_and_never_force_pushes(self):
         with tempfile.TemporaryDirectory(prefix="weave-publish-test-") as temporary:

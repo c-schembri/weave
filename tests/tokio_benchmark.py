@@ -156,6 +156,9 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn("-50.0%", output.getvalue())
         with self.assertRaisesRegex(ValueError, "Incomplete"):
             bench_tokio.analyze(rows[:-1], workload, bench_tokio.BACKENDS, 7)
+        missing_baseline = [row for row in rows if not (row["backend"] == "tokio" and row["repetition"] == 6)]
+        with self.assertRaisesRegex(ValueError, "Incomplete"):
+            bench_tokio.analyze(missing_baseline, workload, bench_tokio.BACKENDS, 7)
         with self.assertRaisesRegex(ValueError, "Duplicate"):
             bench_tokio.analyze(rows + [rows[0]], workload, bench_tokio.BACKENDS, 7)
         with self.assertRaisesRegex(ValueError, "Unmatched"):

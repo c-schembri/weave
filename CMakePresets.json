@@ -27,7 +27,7 @@
     },
     {
       "name": "windows-bench-ci",
-      "displayName": "Windows short Weave/Asio/Tokio comparison",
+      "displayName": "Windows supplemental Weave/Asio/Tokio comparison",
       "inherits": "windows",
       "binaryDir": "${sourceDir}/build/windows-bench-ci",
       "cacheVariables": {

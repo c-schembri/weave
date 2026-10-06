@@ -15,16 +15,7 @@ A concurrent TCP echo server:
 ```cpp
 #include <weave/tcp.hpp>
 #include <weave/log.hpp>
-#include <array>
 #include <span>
-
-weave::Task<void> echo(weave::TcpStream client)
-{
-  std::array<std::byte, 4096> buffer;
-
-  while (auto received = co_await client.read(buffer))
-    co_await client.write_all(std::span{buffer}.first(received));
-}
 
 int main()
 {
@@ -33,7 +24,13 @@ int main()
     return weave::report_error(ctx.error());
 
   auto result = ctx->run(weave::tcp::serve(
-    "127.0.0.1", 8080, {.no_delay = true}, echo));
+    "127.0.0.1",
+    8080,
+    {.no_delay = true},
+    weave::tcp::on_data(
+      [](weave::TcpStream &client, std::span<const std::byte> data) {
+        return client.write_all(data);
+      })));
   if (!result)
     return weave::report_error(result.error());
 }
@@ -41,7 +38,8 @@ int main()
 
 `Task<T>` produces `T` or fails with `std::error_code`. Awaited errors propagate
 automatically; synchronous setup and `run()` return `Result<T>` (`std::expected`).
-`tcp::serve` handles clients concurrently and owns their tasks.
+`tcp::serve` handles clients concurrently and owns their tasks. `on_data` manages
+each client's receive buffer and waits for its callback before reading again.
 
 Windows x64, Visual Studio 2022 C++ workload, CMake 3.25+, Git, and Python 3.11+
 for tests. No Python or third-party dependencies for library-only builds.
@@ -72,7 +70,13 @@ if (!runtime)
   return weave::report_error(runtime.error());
 
 auto result = runtime->run(weave::tcp::serve(
-  "127.0.0.1", 8080, {.no_delay = true}, echo));
+  "127.0.0.1",
+  8080,
+  {.no_delay = true},
+  weave::tcp::on_data(
+    [](weave::TcpStream &client, std::span<const std::byte> data) {
+      return client.write_all(data);
+    })));
 if (!result)
   return weave::report_error(result.error());
 ```
@@ -133,7 +137,13 @@ Installed packages support `find_package(weave CONFIG REQUIRED COMPONENTS tcp)`.
 
 ## Latest Windows Benchmarks
 
+Supplemental benchmarks run sequentially each night or on manual dispatch;
+they never run as PR checks or block correctness CI. The last complete report
+remains below until a newer run finishes.
+
 <!-- benchmark-results:start -->
+Previous short protocol (`windows-tcp-ci-v1`); the longer supplemental run has not completed yet.
+
 Latest complete run: [`e0d7a0b`](https://github.com/c-schembri/weave/commit/e0d7a0bba7744937648f97a3fc9129c3a84b606a), 2026-10-06 05:56 +0000; [full results and raw evidence](https://github.com/c-schembri/weave/actions/runs/37420985804).
 
 Windows x64 / AMD EPYC 9V45 96-Core Processor; server/client workers: 1/1, on separate cores. 7 x 1s per library/workload. Median round trips/second; higher is better.
@@ -159,7 +169,7 @@ CPU use, p99/p99.9 latency, paired confidence intervals, and limitations: [bench
 ## Development
 
 Windows correctness CI runs MSVC Debug, Release, and AddressSanitizer tests;
-performance comparisons run in a separate bounded workflow. Raw benchmark results
+performance comparisons run in a separate nightly/manual workflow. Raw benchmark results
 are artifacts, not tracked source files. [Development rules](AGENTS.md).
 
 No project license has been selected yet. Third-party dependencies retain their own licenses.

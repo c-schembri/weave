@@ -172,7 +172,6 @@ def analyze(samples, workloads, backends, repetitions):
         require(sample["repetition"] not in group, "Duplicate repetition.")
         group[sample["repetition"]] = sample
     require(set(grouped) == {(workload[0], backend) for workload in workloads for backend in backends}, "Unmatched matrix.")
-    rows = []
     for workload in workloads:
         name = workload[0]
         for backend in backends:
@@ -180,6 +179,12 @@ def analyze(samples, workloads, backends, repetitions):
             require(set(group) == set(range(repetitions)), "Incomplete repetitions.")
             require(all((sample["connections"], sample["bytes"], sample["cpu_iterations"], sample["uneven"]) == workload[1:]
                         for sample in group.values()), "Mismatched workload parameters.")
+
+    rows = []
+    for workload in workloads:
+        name = workload[0]
+        for backend in backends:
+            group = grouped[name, backend]
             row = {"workload": name, "backend": backend, "metrics": {}}
             for metric in METRICS:
                 values = [group[index][metric] for index in range(repetitions)]

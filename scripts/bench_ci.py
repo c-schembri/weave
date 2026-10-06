@@ -1,4 +1,4 @@
-"""Bounded Windows CI comparison and publication of its latest complete main-branch report."""
+"""Supplemental, sequential Windows comparison and publication of its latest complete main report."""
 
 import argparse
 from datetime import datetime
@@ -18,11 +18,11 @@ from support.metadata import compiler_versions, environment, source_files, timin
 from support.paired_stats import interval
 
 
-PROTOCOL = "windows-tcp-ci-v1"
-REPETITIONS = 7
-DURATION_MS = 1000
-WARMUP_MS = 250
-TIMEOUT_MS = 300_000
+PROTOCOL = "windows-tcp-supplemental-v2"
+REPETITIONS = 21
+DURATION_MS = 5000
+WARMUP_MS = 1000
+TIMEOUT_MS = 35 * 60 * 1000
 SEED = 60106
 RUST_VERSION = "1.94.0"
 WORKLOADS = (
@@ -67,7 +67,7 @@ def report(samples, metadata):
     require(re.fullmatch(r"[0-9a-f]{40}", metadata["revision"]) is not None, "Invalid source revision.")
     require(type(metadata["worktree"]) is list, "Missing worktree provenance.")
     require(all(sample.get("server_workers") == workers for sample in samples), "Mismatched server worker counts.")
-    require(all(DURATION_MS / 1000 <= sample["wall_seconds"] <= 2.0 for sample in samples),
+    require(all(DURATION_MS / 1000 <= sample["wall_seconds"] <= DURATION_MS / 1000 + 1 for sample in samples),
             "A sample missed the fixed measurement window; do not publish a stalled run.")
     result = analyze(samples, WORKLOADS, BACKENDS, REPETITIONS)
     rows = {(row["workload"], row["backend"]): row for row in result["rows"]}
@@ -135,7 +135,8 @@ def compact_markdown(result, metadata):
     cpu = cpu.replace("|", "/").replace("\r", " ").replace("\n", " ")
     lines = [f"Latest complete run: {source}, {timestamp}; {link}.", "",
              f"Windows x64 / {cpu}; server/client workers: {workers}/{workers}, on separate cores. "
-             f"{REPETITIONS} x {DURATION_MS / 1000:g}s per library/workload. Median round trips/second; higher is better.", "",
+             f"Sequential {REPETITIONS} x {DURATION_MS / 1000:g}s per library/workload ({PROTOCOL}). "
+             "Median round trips/second; higher is better.", "",
              "| Workload | Weave | Asio | Tokio | Max throughput CV | Notes |",
              "| --- | ---: | ---: | ---: | ---: | --- |"]
     rows = {(row["workload"], row["backend"]): row for row in result["rows"]}
@@ -159,7 +160,7 @@ def compact_markdown(result, metadata):
 def full_markdown(result, metadata):
     lines = ["# Windows benchmark results", "", compact_markdown(result, metadata),
              "## Per-library measurements", "",
-             "Medians of seven independent windows; CV is between-window variation, not per-request variation.", "",
+             f"Medians of {REPETITIONS} independent windows; CV is between-window variation, not per-request variation.", "",
              "| Workload | Library | RTT/s | p99 ms | p99.9 ms | Server CPU us/op* | Server kcycles/op | Client cores* | Private MiB | RTT CV | p99 CV | Quality |",
              "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"]
     for row in result["rows"]:
@@ -183,7 +184,7 @@ def full_markdown(result, metadata):
                      f"[{low:.3f}, {high:.3f}] | {'noisy' if pair['noisy'] else 'within thresholds'} |")
     lines.extend(["", "All samples retained; no outlier deletion, adaptive stopping, or selective retries. "
                   "These closed-loop loopback tests do not measure open-loop service latency or internet performance.", "",
-                  f"Measurement supervisor elapsed: {metadata['elapsed_seconds']:.1f}s; hard limit: 300s. "
+                  f"Measurement supervisor elapsed: {metadata['elapsed_seconds']:.1f}s; hard limit: {TIMEOUT_MS // 1000}s. "
                   "Configure, build, and artifact publication are outside that limit."])
     return "\n".join(lines) + "\n"
 
@@ -197,11 +198,12 @@ def worker(args):
     metadata.update(cpu_masks=masks, workers=args.server_workers, client_workers=args.client_workers)
     write_json(args.output_directory / "environment.json", metadata)
     samples = []
+    total = REPETITIONS * len(WORKLOADS) * len(BACKENDS)
     for repetition, workload, backend in schedule():
         sample = measure(args, backend, workload, repetition, masks)
         samples.append(sample)
         write_json(args.output_directory / "samples.json", {"samples": samples, "cpu_masks": masks})
-        print(f"{len(samples):02d}/84 {workload[0]} {backend}: {sample['roundtrips_per_second']:,.0f} RTT/s", flush=True)
+        print(f"{len(samples):03d}/{total} {workload[0]} {backend}: {sample['roundtrips_per_second']:,.0f} RTT/s", flush=True)
     metadata["elapsed_seconds"] = time.monotonic() - start
     result = report(samples, metadata)
     write_json(args.output_directory / "environment.json", metadata)
@@ -271,7 +273,7 @@ def replace_results(readme, markdown):
 def publish(args):
     require(os.environ.get("GITHUB_REPOSITORY") == "c-schembri/weave" and
             os.environ.get("GITHUB_REF") == "refs/heads/main" and
-            os.environ.get("GITHUB_EVENT_NAME") in ("push", "workflow_dispatch"), "Publish only from trusted main runs.")
+            os.environ.get("GITHUB_EVENT_NAME") in ("schedule", "workflow_dispatch"), "Publish only from trusted main runs.")
     publication = read_json(args.report)
     metadata = publication["metadata"]
     require(metadata["revision"] == os.environ.get("GITHUB_SHA") and

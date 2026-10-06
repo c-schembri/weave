@@ -94,8 +94,11 @@
   Existing benchmark smoke tests validate correctness, not performance.
 - Correctness CI configures WEAVE_BUILD_BENCHMARKS=OFF and excludes benchmark
   smokes. The separate Windows benchmark workflow runs only scripts/bench_ci.py's
-  fixed, five-minute Weave/Asio/Tokio protocol. Do not add long research benchmarks
-  or the migration gate to automatic CI. Publish complete main-branch summaries
+  fixed, sequential supplemental Weave/Asio/Tokio protocol on nightly/manual runs.
+  It is independent of correctness/release workflows, never a required PR check.
+  Use 21 five-second windows per backend/workload and a separate 35-minute
+  measurement deadline; the migration gate retains its five-minute deadline.
+  Publish complete main-branch summaries
   in README; retain raw evidence as artifacts, and label noisy comparisons inconclusive
   for the affected metric. Do not let p99 noise invalidate stable throughput results.
 - When benchmarking, compare against the pinned Asio baseline using the same
