@@ -12,11 +12,16 @@
 #include <algorithm>
 #include <array>
 
-TEST_CASE_TEMPLATE(
-  "Runtime factory returns only usable immovable runtimes",
-  Layout,
-  support::ShardedIo,
-  support::SharedIo)
+#if !defined(_WIN32)
+TEST_CASE("Linux rejects shared I/O layout instead of silently creating sharded rings")
+{
+  auto runtime = weave::Runtime::create({.workers = 4, .io_layout = weave::IoLayout::shared});
+  REQUIRE_FALSE(runtime);
+  CHECK(runtime.error() == std::errc::operation_not_supported);
+}
+#endif
+
+TEST_CASE_TEMPLATE("Runtime factory returns only usable immovable runtimes", Layout, WEAVE_TEST_IO_LAYOUTS)
 {
   static_assert(!std::is_default_constructible_v<weave::Runtime>);
   static_assert(!std::is_constructible_v<weave::Runtime, weave::RuntimeOptions>);
@@ -52,7 +57,7 @@ TEST_CASE_TEMPLATE(
   CHECK(invalid_layout.error() == std::errc::invalid_argument);
 }
 
-TEST_CASE_TEMPLATE("Runtime schedules and drains both modes without TCP", Layout, support::ShardedIo, support::SharedIo)
+TEST_CASE_TEMPLATE("Runtime schedules and drains both modes without TCP", Layout, WEAVE_TEST_IO_LAYOUTS)
 {
   for (auto scheduler : {weave::Scheduler::worker_affine, weave::Scheduler::work_stealing}) {
     auto runtime = support::create_runtime<Layout>({.workers = 4, .scheduler = scheduler});
@@ -76,11 +81,7 @@ TEST_CASE_TEMPLATE("Runtime schedules and drains both modes without TCP", Layout
   }
 }
 
-TEST_CASE_TEMPLATE(
-  "Runtime joins nested failures through IO executor routing",
-  Layout,
-  support::ShardedIo,
-  support::SharedIo)
+TEST_CASE_TEMPLATE("Runtime joins nested failures through IO executor routing", Layout, WEAVE_TEST_IO_LAYOUTS)
 {
   for (auto scheduler : {weave::Scheduler::worker_affine, weave::Scheduler::work_stealing}) {
     auto runtime = support::create_runtime<Layout>({.workers = 2, .scheduler = scheduler});
@@ -113,8 +114,7 @@ static weave::Task<int> observed_runtime_failure(weave::Context &ctx, bool delay
 TEST_CASE_TEMPLATE(
   "Both runtime schedulers observe detached errors and preserve joined results",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   for (auto scheduler : {weave::Scheduler::worker_affine, weave::Scheduler::work_stealing}) {
     auto runtime = support::create_runtime<Layout>({.workers = 4, .scheduler = scheduler});
@@ -175,14 +175,15 @@ concept RuntimeSubmission = requires(weave::Runtime &runtime, F &&operation) {
 TEST_CASE_TEMPLATE(
   "Runtime consumes tasks and retains nullary factories under both schedulers",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   static_assert(RuntimeSubmission<weave::Task<int>>);
   static_assert(!RuntimeSubmission<weave::Task<int> &>);
   static_assert(!RuntimeSubmission<const weave::Task<int>>);
   static_assert(RuntimeSubmission<decltype(runtime_thread) &>);
-  static_assert(!RuntimeSubmission<decltype([] { return 42; })>);
+  static_assert(!RuntimeSubmission<decltype([] {
+    return 42;
+  })>);
   static_assert(!RuntimeSubmission<weave::Task<int> &(*)()>);
 
   const auto caller = std::this_thread::get_id();
@@ -211,7 +212,9 @@ TEST_CASE_TEMPLATE(
     runtime->detach(runtime_thread);
 
     for (std::size_t i = 0; i < runtime->worker_count(); ++i) {
-      auto owner = runtime->spawn_on(i, [](weave::Context &ctx) -> weave::Task<weave::Context *> { co_return &ctx; });
+      auto owner = runtime->spawn_on(i, [](weave::Context &ctx) -> weave::Task<weave::Context *> {
+        co_return &ctx;
+      });
       REQUIRE(owner);
       auto ctx = std::move(*owner).get();
       REQUIRE(ctx);
@@ -264,11 +267,7 @@ static weave::Task<void> runtime_unstarted_task(std::unique_ptr<RuntimeUnstarted
   co_return;
 }
 
-TEST_CASE_TEMPLATE(
-  "Runtime destroys rejected prebuilt frames without executing them",
-  Layout,
-  support::ShardedIo,
-  support::SharedIo)
+TEST_CASE_TEMPLATE("Runtime destroys rejected prebuilt frames without executing them", Layout, WEAVE_TEST_IO_LAYOUTS)
 {
   int destroyed = 0, reported = 0;
   const auto caller = std::this_thread::get_id();
@@ -308,8 +307,7 @@ TEST_CASE_TEMPLATE(
 TEST_CASE_TEMPLATE(
   "Runtime detach drains fast values and observed errors under both schedulers",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   const auto submitter = std::this_thread::get_id();
   for (auto scheduler : {weave::Scheduler::worker_affine, weave::Scheduler::work_stealing}) {
@@ -323,10 +321,13 @@ TEST_CASE_TEMPLATE(
             co_await ctx.yield();
           co_return std::make_unique<RuntimeDetachedValue>(destroyed, submitter);
         },
-        [capture = std::make_unique<RuntimeDetachedValue>(handlers, submitter)](
-          weave::Error) noexcept { FAIL("Successful detached task reported an error"); });
+        [capture = std::make_unique<RuntimeDetachedValue>(handlers, submitter)](weave::Error) noexcept {
+          FAIL("Successful detached task reported an error");
+        });
       runtime->detach(
-        [i](weave::Context &ctx) { return observed_runtime_failure(ctx, i % 2 != 0); },
+        [i](weave::Context &ctx) {
+          return observed_runtime_failure(ctx, i % 2 != 0);
+        },
         [&, capture = std::make_unique<RuntimeDetachedValue>(handlers, submitter)](weave::Error error) noexcept {
           CHECK(error == std::errc::io_error);
           CHECK(std::this_thread::get_id() != submitter);
@@ -347,7 +348,9 @@ TEST_CASE_TEMPLATE(
       });
       runtime->detach_on(
         i,
-        [](weave::Context &ctx) { return observed_runtime_failure(ctx, true); },
+        [](weave::Context &ctx) {
+          return observed_runtime_failure(ctx, true);
+        },
         [&, thread = *thread](weave::Error error) noexcept {
           CHECK(error == std::errc::io_error);
           CHECK(std::this_thread::get_id() == thread);
@@ -361,7 +364,9 @@ TEST_CASE_TEMPLATE(
     CHECK(pinned == 4);
     CHECK(pinned_errors == 4);
     int rejected = 0;
-    auto noop = [](weave::Context &) -> weave::Task<void> { co_return; };
+    auto noop = [](weave::Context &) -> weave::Task<void> {
+      co_return;
+    };
     static_assert(std::same_as<decltype(runtime->detach(noop)), void>);
     static_assert(std::same_as<decltype(runtime->detach_on(0, noop)), void>);
     runtime->detach(noop, [&](weave::Error error) noexcept {
@@ -376,8 +381,7 @@ TEST_CASE_TEMPLATE(
 TEST_CASE_TEMPLATE(
   "Runtime detach reports invalid targets and closed admission without executing factories",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   int invoked = 0, rejected = 0;
   std::atomic<int> nested = 0;
@@ -420,8 +424,7 @@ static weave::Task<int> runtime_immediate_failure(std::atomic<int> &started)
 TEST_CASE_TEMPLATE(
   "Detached error callbacks account for tasks and factories racing runtime shutdown",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   for (auto scheduler : {weave::Scheduler::worker_affine, weave::Scheduler::work_stealing}) {
     std::atomic<int> submitted = 0, started = 0, failed = 0, rejected = 0, cancelled = 0;
@@ -488,8 +491,7 @@ TEST_CASE_TEMPLATE(
 TEST_CASE_TEMPLATE(
   "Runtime run supports tasks and factories and preserves results without stopping workers",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   const auto caller = std::this_thread::get_id();
   for (auto scheduler : {weave::Scheduler::worker_affine, weave::Scheduler::work_stealing}) {
@@ -503,7 +505,9 @@ TEST_CASE_TEMPLATE(
     REQUIRE(named);
     CHECK(*named != caller);
 
-    auto value = runtime->run([]() -> weave::Task<std::unique_ptr<int>> { co_return std::make_unique<int>(42); });
+    auto value = runtime->run([]() -> weave::Task<std::unique_ptr<int>> {
+      co_return std::make_unique<int>(42);
+    });
     REQUIRE(value);
     CHECK(**value == 42);
     auto completed = runtime->run(
@@ -519,7 +523,9 @@ TEST_CASE_TEMPLATE(
     CHECK(failed.error() == std::errc::io_error);
     CHECK(started == 1);
     for (bool delayed : {false, true}) {
-      auto result = runtime->run([delayed](weave::Context &ctx) { return observed_runtime_failure(ctx, delayed); });
+      auto result = runtime->run([delayed](weave::Context &ctx) {
+        return observed_runtime_failure(ctx, delayed);
+      });
       REQUIRE_FALSE(result);
       CHECK(result.error() == std::errc::io_error);
     }
@@ -545,8 +551,7 @@ TEST_CASE_TEMPLATE(
 TEST_CASE_TEMPLATE(
   "Runtime run waits only for its root and leaves independent work owned by the runtime",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   for (auto scheduler : {weave::Scheduler::worker_affine, weave::Scheduler::work_stealing}) {
     std::atomic<bool> release = false;
@@ -573,8 +578,7 @@ TEST_CASE_TEMPLATE(
 TEST_CASE_TEMPLATE(
   "Factory runtime destruction drains detached work without explicit shutdown",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   const auto caller = std::this_thread::get_id();
   for (auto scheduler : {weave::Scheduler::worker_affine, weave::Scheduler::work_stealing}) {
@@ -592,8 +596,7 @@ TEST_CASE_TEMPLATE(
 TEST_CASE_TEMPLATE(
   "Scoped detach owns move-only closures, handlers and results under both scheduling policies",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   const auto caller = std::this_thread::get_id();
   for (auto scheduler : {weave::Scheduler::worker_affine, weave::Scheduler::work_stealing}) {
@@ -642,8 +645,7 @@ TEST_CASE_TEMPLATE(
 TEST_CASE_TEMPLATE(
   "Scoped detach on a stealing worker creates independent stealable roots even from Context-owned tasks",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   for (bool local : {false, true}) {
     auto runtime = support::create_runtime<Layout>({.workers = 4, .scheduler = weave::Scheduler::work_stealing});
@@ -666,7 +668,9 @@ TEST_CASE_TEMPLATE(
       }
       // Blocking this worker is test-only: children must be independently stolen to finish.
       std::unique_lock lock(mutex);
-      const bool stolen = wake.wait_for(lock, std::chrono::seconds(3), [&] { return completed == 3; });
+      const bool stolen = wake.wait_for(lock, std::chrono::seconds(3), [&] {
+        return completed == 3;
+      });
       co_return stolen;
     };
     auto parent = runtime->spawn_on(0, [&](weave::Context &ctx) -> weave::Task<bool> {
@@ -688,8 +692,7 @@ TEST_CASE_TEMPLATE(
 TEST_CASE_TEMPLATE(
   "Scoped detach after runtime stop rejects synchronously and releases unstarted frames",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   for (auto scheduler : {weave::Scheduler::worker_affine, weave::Scheduler::work_stealing}) {
     auto runtime = support::create_runtime<Layout>({.workers = 2, .scheduler = scheduler});
@@ -726,8 +729,7 @@ TEST_CASE_TEMPLATE(
 TEST_CASE_TEMPLATE(
   "Mixed pinned and movable queue bursts drain exactly once while their parent blocks",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   auto runtime = support::create_runtime<Layout>({.workers = 4, .scheduler = weave::Scheduler::work_stealing});
   REQUIRE(runtime);
@@ -767,7 +769,9 @@ TEST_CASE_TEMPLATE(
           }
           wake.notify_one();
         };
-        auto on_error = [&](weave::Error) noexcept { ++violations; };
+        auto on_error = [&](weave::Error) noexcept {
+          ++violations;
+        };
         if (pinned)
           runtime->detach_on(destination, std::move(operation), on_error);
         else
@@ -775,7 +779,9 @@ TEST_CASE_TEMPLATE(
       }
       // Test-only blocking forces thieves to publish and service their transferred batches.
       std::unique_lock lock(mutex);
-      co_return wake.wait_for(lock, std::chrono::seconds(3), [&] { return completed == count; });
+      co_return wake.wait_for(lock, std::chrono::seconds(3), [&] {
+        return completed == count;
+      });
     });
     REQUIRE(parent);
     REQUIRE(std::move(*parent).get() == true);

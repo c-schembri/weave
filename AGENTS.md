@@ -1,6 +1,9 @@
 # Weave development rules
 
-- Windows IOCP first; Linux io_uring later. No epoll or macOS backend.
+- Windows uses IOCP; Linux uses liburing/io_uring. No epoll or macOS backend.
+  Keep Linux SQ/CQ access on each Context's owner, route migrated submissions
+  through its queue, and retain cancelled operations until both native and
+  cancellation CQEs drain. Linux shared I/O layout is explicitly unsupported.
 - C++23, CMake, exceptions disabled. Public asynchronous type is Task<T>.
 - Task<T> means asynchronous T or std::error_code; participating awaits propagate
   errors automatically. Use as_result() for recovery and Result<T> at synchronous
@@ -227,7 +230,7 @@
   template implementation headers in the owning module's <name>/detail/ directory;
   those are installed but not supported public APIs. Compiled implementation
   headers stay under src/ and are never installed.
-- Keep platform implementations under their owner's src/windows/ (and eventually
+- Keep platform implementations under their owner's src/windows/ (and
   src/linux/). TCP uses IO's private backend contract; protocol modules should use
   transport APIs, not reach into IOCP internals or the runtime scheduler.
 - Put cross-module correctness tests in tests/integration/ and shared C++ fixtures

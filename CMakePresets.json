@@ -43,6 +43,31 @@
       }
     },
     {
+      "name": "linux-debug",
+      "displayName": "Linux io_uring correctness tests including TLS",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/linux-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "WEAVE_MODULES": "core;io;runtime;tcp;sync;tls",
+        "WEAVE_BUILD_TESTS": "ON",
+        "WEAVE_BUILD_BENCHMARKS": "OFF",
+        "WEAVE_BUILD_EXAMPLES": "ON"
+      }
+    },
+    {
+      "name": "linux-release",
+      "inherits": "linux-debug",
+      "binaryDir": "${sourceDir}/build/linux-release",
+      "cacheVariables": {"CMAKE_BUILD_TYPE": "Release"}
+    },
+    {
+      "name": "linux-asan",
+      "inherits": "linux-debug",
+      "binaryDir": "${sourceDir}/build/linux-asan",
+      "cacheVariables": {"WEAVE_ENABLE_ASAN": "ON"}
+    },
+    {
       "name": "windows-runtime-bench",
       "displayName": "Windows local runtime scaling comparison",
       "inherits": "windows",
@@ -68,6 +93,9 @@
     }
   ],
   "buildPresets": [
+    {"name": "linux-debug", "configurePreset": "linux-debug"},
+    {"name": "linux-release", "configurePreset": "linux-release"},
+    {"name": "linux-asan", "configurePreset": "linux-asan"},
     {"name": "debug", "configurePreset": "windows", "configuration": "Debug"},
     {"name": "release", "configurePreset": "windows", "configuration": "Release"},
     {"name": "ci-debug", "configurePreset": "windows-ci", "configuration": "Debug"},
@@ -79,6 +107,9 @@
     {"name": "asan", "configurePreset": "asan", "configuration": "Release"}
   ],
   "testPresets": [
+    {"name": "linux-debug", "configurePreset": "linux-debug", "output": {"outputOnFailure": true}},
+    {"name": "linux-release", "configurePreset": "linux-release", "output": {"outputOnFailure": true}},
+    {"name": "linux-asan", "configurePreset": "linux-asan", "output": {"outputOnFailure": true}},
     {"name": "debug", "configurePreset": "windows", "configuration": "Debug", "output": {"outputOnFailure": true}},
     {"name": "release", "configurePreset": "windows", "configuration": "Release", "output": {"outputOnFailure": true}},
     {"name": "ci-debug", "configurePreset": "windows-ci", "configuration": "Debug", "output": {"outputOnFailure": true}, "filter": {"exclude": {"label": "benchmark"}}},

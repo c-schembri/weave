@@ -125,7 +125,9 @@ TEST_CASE("Void and non-void error sources propagate without exceptions")
   CHECK(a.error() == std::errc::permission_denied);
   CHECK(b.error() == std::errc::invalid_argument);
   CHECK(unreachable == 0);
-  auto zero_error = []() -> Task<void> { co_await weave::fail(weave::Error{}); };
+  auto zero_error = []() -> Task<void> {
+    co_await weave::fail(weave::Error{});
+  };
   CHECK_FALSE(ctx->run(zero_error()));
 }
 
@@ -157,7 +159,9 @@ TEST_CASE("Multiple awaits in one expression do not retain stale ownership links
   REQUIRE(ctx);
 
   int calls = 0;
-  auto sum = [&]() -> Task<int> { co_return (co_await answer(calls)) + (co_await answer(calls)); };
+  auto sum = [&]() -> Task<int> {
+    co_return (co_await answer(calls)) + (co_await answer(calls));
+  };
   CHECK(ctx->run(sum()) == Result<int>{84});
   CHECK(calls == 2);
 }
@@ -167,7 +171,9 @@ TEST_CASE("Move-only tasks compose with explicitly checked synchronous Results")
   auto ctx = weave::Context::create();
   REQUIRE(ctx);
 
-  auto child = []() -> Task<std::unique_ptr<int>> { co_return std::make_unique<int>(73); };
+  auto child = []() -> Task<std::unique_ptr<int>> {
+    co_return std::make_unique<int>(73);
+  };
   auto parent = [&]() -> Task<std::unique_ptr<int>> {
     auto n = Result<int>{3};
     if (!n)
@@ -242,7 +248,9 @@ TEST_CASE("Join-all waits for delayed siblings and selects errors by argument or
     ++finished;
     co_await weave::fail(std::errc::address_in_use);
   };
-  auto fast = [&]() -> Task<void> { co_await weave::fail(std::errc::io_error); };
+  auto fast = [&]() -> Task<void> {
+    co_await weave::fail(std::errc::io_error);
+  };
   auto parent = [&]() -> Task<void> {
     co_await weave::when_all(slow(), fast());
     ++unreachable;
@@ -296,8 +304,12 @@ TEST_CASE("TCP partial receives, large concurrent transfers, EOF and closed stre
     std::vector<std::byte> tx(4 * 1024 * 1024), rx(tx.size());
     for (std::size_t i = 0; i < tx.size(); ++i)
       tx[i] = static_cast<std::byte>(i % 251);
-    auto writer = [&]() -> Task<void> { co_await socket->write_all(tx); };
-    auto reader = [&]() -> Task<void> { co_await socket->read_exactly(rx); };
+    auto writer = [&]() -> Task<void> {
+      co_await socket->write_all(tx);
+    };
+    auto reader = [&]() -> Task<void> {
+      co_await socket->read_exactly(rx);
+    };
     REQUIRE(ctx->run(weave::when_all(writer(), reader())));
     CHECK(tx == rx);
     auto finish = [&]() -> Task<void> {
@@ -354,7 +366,7 @@ TEST_CASE("A sibling failure cannot free a cancelled read before its IOCP packet
     };
     auto result = ctx->run(weave::when_all(pending(), cancel()));
     REQUIRE_FALSE(result);
-    CHECK(result.error().value() == ERROR_OPERATION_ABORTED);
+    CHECK(result.error().value() == support::native_cancelled);
     CHECK(log == std::vector<int>{1});
     CHECK(ctx->metrics().submitted == ctx->metrics().completed);
     CHECK(socket->close());
@@ -428,7 +440,9 @@ TEST_CASE("Runtime roots preserve errors and cleanup under both schedulers")
     std::atomic<int> destroyed = 0;
     std::vector<weave::JoinHandle<int>> jobs;
     for (int i = 0; i < 256; ++i) {
-      auto job = runtime->spawn([i, &destroyed](weave::Context &ctx) { return worker_task(ctx, i, destroyed); });
+      auto job = runtime->spawn([i, &destroyed](weave::Context &ctx) {
+        return worker_task(ctx, i, destroyed);
+      });
       REQUIRE(job);
       if (i < 128)
         jobs.push_back(std::move(*job));
@@ -479,8 +493,9 @@ TEST_CASE("Runtime shutdown drains pending AcceptEx before destroying failed Tas
     std::atomic<unsigned> started = 0, destroyed = 0, unreachable = 0;
     std::vector<weave::JoinHandle<void>> jobs;
     for (int i = 0; i < 64; ++i) {
-      auto job = runtime->spawn(
-        [&](weave::Context &ctx) { return stopped_accept(ctx, started, destroyed, unreachable); });
+      auto job = runtime->spawn([&](weave::Context &ctx) {
+        return stopped_accept(ctx, started, destroyed, unreachable);
+      });
       REQUIRE(job);
       jobs.push_back(std::move(*job));
     }
@@ -549,7 +564,9 @@ TEST_CASE("Ready and pending joins propagate failures and support explicit recov
       REQUIRE(recovery);
       CHECK(std::move(*recovery).get() == 42);
       CHECK(unreachable == 0);
-      auto zero = runtime->spawn([](weave::Context &) -> Task<void> { co_await weave::fail(weave::Error{}); });
+      auto zero = runtime->spawn([](weave::Context &) -> Task<void> {
+        co_await weave::fail(weave::Error{});
+      });
       REQUIRE(zero);
       CHECK_FALSE(std::move(*zero).get());
       runtime->join();

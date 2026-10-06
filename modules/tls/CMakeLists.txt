@@ -1,7 +1,14 @@
 find_package(OpenSSL 3.0 REQUIRED COMPONENTS SSL Crypto)
-add_library(weave_tls src/engine.cpp src/windows/trust.cpp)
+if(WIN32)
+  add_library(weave_tls src/engine.cpp src/windows/trust.cpp)
+else()
+  add_library(weave_tls src/engine.cpp src/linux/trust.cpp)
+endif()
 weave_module(tls)
-target_link_libraries(weave_tls PUBLIC weave::tcp weave::sync PRIVATE OpenSSL::SSL OpenSSL::Crypto crypt32)
+target_link_libraries(weave_tls PUBLIC weave::tcp weave::sync PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+if(WIN32)
+  target_link_libraries(weave_tls PRIVATE crypt32)
+endif()
 
 # Imported OpenSSL libraries do not consistently describe their runtime DLLs.
 get_filename_component(openssl_prefix "${OPENSSL_INCLUDE_DIR}" DIRECTORY)

@@ -300,8 +300,12 @@ struct Runtime::Impl {
     detail::ContextAccess::observe(
       *ctx,
       {this,
-        [](void *state) noexcept { static_cast<Impl *>(state)->active.fetch_add(1, std::memory_order_relaxed); },
-        [](void *state) noexcept { static_cast<Impl *>(state)->finished(); }});
+        [](void *state) noexcept {
+          static_cast<Impl *>(state)->active.fetch_add(1, std::memory_order_relaxed);
+        },
+        [](void *state) noexcept {
+          static_cast<Impl *>(state)->finished();
+        }});
     detail::ContextAccess::enter(*ctx, scheduler == Scheduler::work_stealing ? this : nullptr);
     current_scheduler = this;
     current_worker = index;
@@ -358,7 +362,7 @@ struct Runtime::Impl {
       worker.idle.store(false, std::memory_order_release);
     }
     {
-      // Exclude late wake-ups before the worker destroys its IOCP handle.
+      // Exclude late wake-ups before the worker destroys its native I/O backend.
       std::lock_guard lock(submissions);
       worker.context = nullptr;
     }
@@ -382,8 +386,12 @@ Result<Runtime> Runtime::create(RuntimeOptions options) noexcept
     auto domain = detail::ContextAccess::create_domain(
       count,
       {impl.get(),
-        [](void *state) noexcept { static_cast<Impl *>(state)->dispatching.fetch_add(1, std::memory_order_acq_rel); },
-        [](void *state) noexcept { static_cast<Impl *>(state)->dispatch_finished(); }});
+        [](void *state) noexcept {
+          static_cast<Impl *>(state)->dispatching.fetch_add(1, std::memory_order_acq_rel);
+        },
+        [](void *state) noexcept {
+          static_cast<Impl *>(state)->dispatch_finished();
+        }});
     if (!domain)
       return std::unexpected(domain.error());
     impl->io_domain = std::move(*domain);
@@ -395,7 +403,9 @@ Result<Runtime> Runtime::create(RuntimeOptions options) noexcept
   Error error;
   for (std::size_t i = 0; i < count; ++i) {
     auto &worker = *impl->workers[i];
-    worker.thread = std::thread([state = impl.get(), i, options] { state->run(i, options.context); });
+    worker.thread = std::thread([state = impl.get(), i, options] {
+      state->run(i, options.context);
+    });
     worker.ready.wait(false, std::memory_order_acquire);
     if (worker.error && !error)
       error = worker.error;

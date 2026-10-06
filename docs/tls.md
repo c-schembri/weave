@@ -37,8 +37,8 @@ int main()
 Client verification is mandatory. DNS names verify the certificate hostname and
 send SNI; IP literals verify IP subject-alternative names. There is no insecure
 verification-off option. `TlsContext::client({.ca_file = "issuer.pem"})` uses an
-explicit trust file instead of defaults. By default OpenSSL paths and Windows
-ROOT certificates are loaded. Importing ROOT is not equivalent to the complete
+explicit trust file instead of defaults. OpenSSL default paths are loaded on both
+platforms; Windows additionally imports ROOT certificates. Importing ROOT is not equivalent to the complete
 Windows certificate-chain policy: distrust, revocation and enterprise policy are
 not mirrored. OCSP/CRL checks are not configured in this first implementation.
 
@@ -121,6 +121,9 @@ and Core automatically; Runtime remains optional. Installed consumers use
 must provide its runtime DLLs; development targets copy DLLs from the detected
 `bin` directory, overridable with `WEAVE_TLS_RUNTIME_DIR`. Installed consumers
 remain responsible for their dependency deployment.
+
+Linux presets include TLS and use system OpenSSL libraries and trust paths.
+[Linux/WSL build instructions](linux.md).
 
 Tests generate temporary CA/leaf credentials at execution, not committed private
 keys. They exercise TLS versions, verified names/IPs, rejected chains/expiry/ALPN,

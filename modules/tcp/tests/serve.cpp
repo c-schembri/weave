@@ -3,7 +3,7 @@
 #include <weave/tcp/serve.hpp>
 #include <weave/timer.hpp>
 #include "echo_peer.hpp"
-#include "windows/iocp.hpp"
+#include "backend.hpp"
 #include <memory>
 
 using namespace std::chrono_literals;
@@ -98,7 +98,9 @@ TEST_CASE("TCP serve is lazy and reports setup errors without invoking client ha
   auto ctx = weave::Context::create();
   REQUIRE(ctx);
   int observed = 0;
-  auto invalid = ctx->run(weave::tcp::serve("not-an-ip", 0, {}, discard, [&](weave::Error) noexcept { ++observed; }));
+  auto invalid = ctx->run(weave::tcp::serve("not-an-ip", 0, {}, discard, [&](weave::Error) noexcept {
+    ++observed;
+  }));
   REQUIRE_FALSE(invalid);
   CHECK(invalid.error() == std::errc::invalid_argument);
   auto listener = weave::tcp::listen(*ctx, "127.0.0.1", 0);
@@ -144,13 +146,13 @@ TEST_CASE("TCP serve isolates client failures, configures sockets and drains can
       // The registry also holds the listener and the next AcceptEx's temporary socket.
       for (auto handle : handles) {
         sockaddr_in peer{};
-        int peer_size = sizeof(peer);
+        support::SocketLength peer_size = sizeof(peer);
         if (getpeername(handle, reinterpret_cast<sockaddr *>(&peer), &peer_size) != 0)
           continue;
-        BOOL enabled = FALSE;
-        int size = sizeof(enabled);
+        int enabled = 0;
+        support::SocketLength size = sizeof(enabled);
         REQUIRE(getsockopt(handle, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<char *>(&enabled), &size) == 0);
-        CHECK(enabled == TRUE);
+        CHECK(enabled == 1);
         ++connected;
       }
       CHECK(connected == 1);
@@ -178,7 +180,7 @@ TEST_CASE("TCP serve isolates client failures, configures sockets and drains can
       CHECK(state.cancelled == 1);
     };
     auto result = ctx->run(weave::timeout(5s, exercise()));
-    CHECK(closesocket(idle) == 0);
+    CHECK(support::close_socket(idle) == 0);
     REQUIRE(result);
     REQUIRE(listener->close());
     CHECK(weave::detail::IoAccess::state(*ctx).registered_handles_.empty());
@@ -246,13 +248,13 @@ TEST_CASE("TCP serve drains clients before reporting a native accept failure")
     REQUIRE(listener->cancel());
     auto result = co_await weave::as_result(std::move(*server));
     REQUIRE_FALSE(result);
-    CHECK(result.error().value() == ERROR_OPERATION_ABORTED);
+    CHECK(result.error().value() == support::native_cancelled);
     CHECK(state.active == 0);
     CHECK(state.destroyed == 1);
     CHECK(state.handler_destroyed == 1);
   };
   auto result = ctx->run(weave::timeout(5s, exercise()));
-  CHECK(closesocket(idle) == 0);
+  CHECK(support::close_socket(idle) == 0);
   REQUIRE(result);
   REQUIRE(listener->close());
   CHECK(weave::detail::IoAccess::state(*ctx).registered_handles_.empty());
@@ -278,7 +280,7 @@ TEST_CASE("Context shutdown drains TCP serve and its pending clients")
     REQUIRE(ctx->run(weave::timeout(5s, wait())));
     ctx->request_stop();
     ctx->shutdown();
-    CHECK(closesocket(idle) == 0);
+    CHECK(support::close_socket(idle) == 0);
     REQUIRE(server->ready());
     auto result = std::move(*server).get();
     REQUIRE_FALSE(result);
@@ -306,7 +308,9 @@ TEST_CASE("Precancelling TCP serve reclaims handlers without opening sockets")
       0,
       {},
       EchoHandler{state, std::make_unique<HandlerLifetime>(state)},
-      [&](weave::Error) noexcept { ++observed; }),
+      [&](weave::Error) noexcept {
+        ++observed;
+      }),
     {.cancel = stop.token()});
   REQUIRE(server);
   auto result = ctx->run(std::move(*server).as_task());

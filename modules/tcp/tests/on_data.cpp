@@ -2,7 +2,7 @@
 #include <weave/tcp/on_data.hpp>
 #include <weave/tcp/serve.hpp>
 #include <weave/timer.hpp>
-#include "windows/iocp.hpp"
+#include "backend.hpp"
 #include <memory>
 #include <vector>
 #include <algorithm>
@@ -26,8 +26,11 @@ TEST_CASE("TCP on_data requires an asynchronous callback and nonempty buffer")
   static_assert(!std::invocable<Adapter &&, weave::TcpStream>);
   static_assert(DataBufferSize<1>);
   static_assert(!DataBufferSize<0>);
-  using Synchronous = decltype([](weave::TcpStream &, std::span<const std::byte>) {});
-  using MutableBytes = decltype([](weave::TcpStream &, std::span<std::byte>) -> weave::Task<void> { co_return; });
+  using Synchronous = decltype([](weave::TcpStream &, std::span<const std::byte>) {
+  });
+  using MutableBytes = decltype([](weave::TcpStream &, std::span<std::byte>) -> weave::Task<void> {
+    co_return;
+  });
   static_assert(!weave::detail::TcpDataCallback<Synchronous>);
   static_assert(!weave::detail::TcpDataCallback<MutableBytes>);
 }
@@ -120,7 +123,9 @@ TEST_CASE("TCP on_data reuses its buffer only after awaited handlers finish and 
             co_await ctx->yield();
             co_await client.write_all(data);
           }),
-        [&](weave::Error) noexcept { ++errors; }));
+        [&](weave::Error) noexcept {
+          ++errors;
+        }));
     REQUIRE(server);
     CHECK(state.calls == 0);
 

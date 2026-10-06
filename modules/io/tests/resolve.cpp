@@ -1,9 +1,15 @@
+#if defined(_WIN32)
 #include "windows/resolve.hpp"
+#else
+#include <weave/io.hpp>
+#include <weave/resolve.hpp>
+#endif
 #include <doctest/doctest.h>
 #include <array>
 #include <atomic>
 #include <thread>
 
+#if defined(_WIN32)
 struct ResolverFixture {
   enum class Mode {
     immediate,
@@ -229,6 +235,8 @@ TEST_CASE("Pre-cancelled resolver tasks do not start native queries")
   }
   CHECK(fixture.queries == 0);
 }
+
+#endif
 
 TEST_CASE("Native async resolver supports local names and family filters without external DNS")
 {

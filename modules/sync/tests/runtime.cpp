@@ -5,6 +5,7 @@
 #include <atomic>
 #include <vector>
 #include <thread>
+#include "runtime_fixture.hpp"
 
 static weave::Task<void> messages(weave::Channel<int> &channel, int start)
 {
@@ -28,7 +29,7 @@ static weave::Task<void> permit(weave::Semaphore &semaphore)
 
 TEST_CASE("Channels and semaphore cancellation races drain across both runtime layouts and schedulers")
 {
-  const std::array layouts{weave::IoLayout::sharded, weave::IoLayout::shared};
+  constexpr auto layouts = support::io_layouts;
   const std::array schedulers{weave::Scheduler::worker_affine, weave::Scheduler::work_stealing};
 
   for (auto layout : layouts) {

@@ -3,6 +3,7 @@
 #include <weave/runtime.hpp>
 #include "async_echo_peer.hpp"
 #include "runtime_fixture.hpp"
+#include "native_errors.hpp"
 
 namespace test_task_concurrent {
 
@@ -40,7 +41,7 @@ static bool wait_for(P predicate)
   while (!predicate()) {
     if (std::chrono::steady_clock::now() >= end)
       return false;
-    Sleep(1);
+    std::this_thread::sleep_for(std::chrono::milliseconds{1});
   }
   return true;
 }
@@ -142,11 +143,7 @@ static weave::Task<void> cancelled_session(
   session.resumed_after_failure = true;
 }
 
-TEST_CASE_TEMPLATE(
-  "1024 live connections recover nested failures under both schedulers",
-  Layout,
-  support::ShardedIo,
-  support::SharedIo)
+TEST_CASE_TEMPLATE("1024 live connections recover nested failures under both schedulers", Layout, WEAVE_TEST_IO_LAYOUTS)
 {
   constexpr unsigned count = 1024;
   for (auto scheduler : {weave::Scheduler::worker_affine, weave::Scheduler::work_stealing}) {
@@ -166,11 +163,16 @@ TEST_CASE_TEMPLATE(
         REQUIRE(job);
         jobs.push_back(std::move(*job));
       }
-      const bool ready = wait_for([&] { return gate.ready == count || gate.finished != 0; }) && gate.ready == count;
+      const bool ready = wait_for([&] {
+        return gate.ready == count || gate.finished != 0;
+      }) &&
+        gate.ready == count;
       gate.open = true;
       if (!ready)
         runtime->request_stop();
-      const bool exchanged = ready && wait_for([&] { return gate.exchanged == count || gate.finished != 0; }) &&
+      const bool exchanged = ready && wait_for([&] {
+        return gate.exchanged == count || gate.finished != 0;
+      }) &&
         gate.exchanged == count;
       peer.stop();
       for (auto &job : jobs)
@@ -183,7 +185,7 @@ TEST_CASE_TEMPLATE(
         CHECK(session.observed);
         // The fixture closes with an outstanding receive, so Windows may reset
         // instead of delivering a graceful FIN. Both must cleanly end the Task.
-        CHECK((!session.error || session.error.value() == WSAECONNRESET));
+        CHECK((!session.error || session.error.value() == support::native_reset));
         CHECK(session.exchanges == 8);
         CHECK(session.recovered == 3);
         CHECK(session.live == 0);
@@ -199,8 +201,7 @@ TEST_CASE_TEMPLATE(
 TEST_CASE_TEMPLATE(
   "Concurrent sibling failure retains borrowed buffers until cancelled IOCP reads drain",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   constexpr unsigned count = 256;
   for (auto scheduler : {weave::Scheduler::worker_affine, weave::Scheduler::work_stealing}) {
@@ -225,7 +226,7 @@ TEST_CASE_TEMPLATE(
       runtime->join();
       CHECK(gate.finished == count);
       for (const auto &session : sessions) {
-        CHECK(session.error.value() == ERROR_OPERATION_ABORTED);
+        CHECK(session.error.value() == support::native_cancelled);
         CHECK(session.observed);
         CHECK(session.live == 0);
         CHECK(session.destroyed == 2);
@@ -240,8 +241,7 @@ TEST_CASE_TEMPLATE(
 TEST_CASE_TEMPLATE(
   "Multicore shutdown drains pending TCP reads even when half the join handles were dropped",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   constexpr unsigned count = 256;
   for (auto scheduler : {weave::Scheduler::worker_affine, weave::Scheduler::work_stealing}) {
@@ -273,7 +273,10 @@ TEST_CASE_TEMPLATE(
         if (i % 2)
           jobs.push_back(std::move(*job));
       }
-      const bool ready = wait_for([&] { return gate.ready == count || gate.finished != 0; }) && gate.ready == count;
+      const bool ready = wait_for([&] {
+        return gate.ready == count || gate.finished != 0;
+      }) &&
+        gate.ready == count;
       runtime->shutdown();
       for (auto &job : jobs)
         REQUIRE(std::move(job).get());

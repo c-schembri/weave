@@ -86,6 +86,11 @@ long-running hostile-peer stress remain future hardening work.
 
 ## 5. Linux io_uring
 
-Implement the same task, completion, cancellation and lifetime contracts with
-io_uring. Add Linux correctness CI and platform-matched measurements before making
-cross-platform performance claims. No epoll fallback or macOS backend is planned.
+Implemented initial sharded-ring Contexts, TCP, DNS, timers, cancellation,
+synchronization and TLS, using the existing runtime schedulers and public API.
+Linux Debug, Release and ASan validation are available through CMake presets.
+[Linux requirements and limitations](linux.md).
+
+Shared-ring collectors, Linux correctness CI and platform-matched measurements
+remain follow-up work before cross-platform performance claims. No epoll fallback
+or macOS backend is planned.

@@ -3,6 +3,7 @@
 #include <weave/tls.hpp>
 #include <weave/timer.hpp>
 #include "tls_certificates.hpp"
+#include "runtime_fixture.hpp"
 
 using namespace std::chrono_literals;
 
@@ -71,7 +72,7 @@ TEST_CASE("TLS duplex streams drain on all four-worker scheduler and IO layout c
   REQUIRE(server);
   REQUIRE(client);
 
-  const std::array layouts{weave::IoLayout::sharded, weave::IoLayout::shared};
+  constexpr auto layouts = support::io_layouts;
   const std::array schedulers{weave::Scheduler::worker_affine, weave::Scheduler::work_stealing};
 
   for (auto layout : layouts) {

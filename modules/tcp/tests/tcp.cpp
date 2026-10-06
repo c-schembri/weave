@@ -3,7 +3,7 @@
 #include <weave/tcp.hpp>
 #include <weave/timer.hpp>
 #include "echo_peer.hpp"
-#include "windows/iocp.hpp"
+#include "backend.hpp"
 #include <atomic>
 #include <optional>
 #include <type_traits>
@@ -216,11 +216,11 @@ TEST_CASE("AcceptEx returns usable streams and RAII releases moved handles")
   REQUIRE(port != 0);
   std::atomic<bool> ok = false;
   std::thread peer([&] {
-    SOCKET socket = support::connect(port);
+    support::Socket socket = support::connect(port);
     std::array<char, 4> message{'p', 'i', 'n', 'g'}, received{};
     ok = support::write_all(socket, message.data(), message.size()) &&
       support::read_exactly(socket, received.data(), received.size()) && message == received;
-    closesocket(socket);
+    support::close_socket(socket);
   });
   auto accepted = ctx->run(listener->accept({.no_delay = true}));
   if (accepted) {
@@ -260,12 +260,12 @@ TEST_CASE("Accept options configure the native socket before returning the strea
       auto peer = support::connect(listener->local_port());
       auto operation = mode == 0 ? listener->accept() : listener->accept({.no_delay = mode == 2});
       auto client = ctx->run(std::move(operation));
-      CHECK(closesocket(peer) == 0);
+      CHECK(support::close_socket(peer) == 0);
       REQUIRE(client);
       REQUIRE(io.registered_handles_.size() == 2);
 
-      BOOL enabled = FALSE;
-      int size = sizeof(enabled);
+      int enabled = 0;
+      support::SocketLength size = sizeof(enabled);
       auto queried = getsockopt(
         io.registered_handles_.back(),
         IPPROTO_TCP,
@@ -308,7 +308,7 @@ static weave::Task<void> read_cancelled(weave::TcpStream &client, bool &cancelle
 {
   std::array<std::byte, 8> buffer{};
   auto result = co_await weave::as_result(client.read(buffer));
-  cancelled = !result && result.error().value() == ERROR_OPERATION_ABORTED;
+  cancelled = !result && result.error().value() == support::native_cancelled;
 }
 
 static weave::Task<void> cancel_read(weave::TcpStream &client, bool &guarded)
@@ -344,7 +344,7 @@ static weave::Task<void> accept_cancelled(
   weave::AcceptOptions options = {})
 {
   auto result = co_await weave::as_result(listener.accept(options));
-  cancelled = !result && result.error().value() == ERROR_OPERATION_ABORTED;
+  cancelled = !result && result.error().value() == support::native_cancelled;
 }
 
 static weave::Task<void> cancel_accept(weave::TcpListener &listener, bool &guarded)
@@ -639,7 +639,9 @@ TEST_CASE("Context stop cancels sockets registered before run and drains pending
     CHECK(ctx->metrics().submitted > ctx->metrics().completed);
     CHECK(destroyed == 0);
 
-    std::thread stopper([&] { ctx->request_stop(); });
+    std::thread stopper([&] {
+      ctx->request_stop();
+    });
     stopper.join();
     ctx->shutdown();
     REQUIRE(job->ready());
@@ -710,7 +712,7 @@ TEST_CASE("Task error observers see native cancellation once after pending IO co
     bool continued = false;
     auto accept = [&]() -> weave::Task<void> {
       (void)co_await listener->accept().on_error([&](weave::Error error) noexcept {
-        CHECK(error.value() == ERROR_OPERATION_ABORTED);
+        CHECK(error.value() == support::native_cancelled);
         ++observed;
       });
       continued = true;
@@ -722,7 +724,7 @@ TEST_CASE("Task error observers see native cancellation once after pending IO co
     };
     auto result = ctx->run(weave::when_all(accept(), cancel()));
     REQUIRE_FALSE(result);
-    CHECK(result.error().value() == ERROR_OPERATION_ABORTED);
+    CHECK(result.error().value() == support::native_cancelled);
     CHECK(observed == 1);
     CHECK_FALSE(continued);
     CHECK(ctx->metrics().submitted == ctx->metrics().completed);

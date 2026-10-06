@@ -5,6 +5,7 @@
 #include <weave/timer.hpp>
 #include <array>
 #include <atomic>
+#include "runtime_fixture.hpp"
 
 static weave::Task<void> resolved_client(weave::u16 port)
 {
@@ -62,7 +63,7 @@ static weave::Task<void> resolved_burst(std::atomic<unsigned> &completed)
 TEST_CASE("Concurrent IPv6 DNS connections work across runtime schedulers and IOCP layouts")
 {
   constexpr std::array schedulers{weave::Scheduler::worker_affine, weave::Scheduler::work_stealing};
-  constexpr std::array layouts{weave::IoLayout::sharded, weave::IoLayout::shared};
+  constexpr auto layouts = support::io_layouts;
   constexpr std::array completion_modes{false, true};
 
   for (auto scheduler : schedulers) {

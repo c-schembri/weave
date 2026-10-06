@@ -3,7 +3,7 @@ function(weave_no_exceptions target)
     target_compile_options(${target} PRIVATE /W4 /permissive- /EHs-c-)
     target_compile_definitions(${target} PRIVATE _HAS_EXCEPTIONS=0)
   else()
-    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -fno-exceptions)
+    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Wno-missing-field-initializers -fno-exceptions)
   endif()
 endfunction()
 

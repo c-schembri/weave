@@ -22,11 +22,7 @@ static weave::Scheduler test_scheduler()
   return mode;
 }
 
-TEST_CASE_TEMPLATE(
-  "Runtime executes on multiple workers and preserves task affinity",
-  Layout,
-  support::ShardedIo,
-  support::SharedIo)
+TEST_CASE_TEMPLATE("Runtime executes on multiple workers and preserves task affinity", Layout, WEAVE_TEST_IO_LAYOUTS)
 {
   auto runtime = support::create_runtime<Layout>({.workers = 4, .scheduler = test_scheduler()});
   REQUIRE(runtime);
@@ -63,8 +59,7 @@ TEST_CASE_TEMPLATE(
 TEST_CASE_TEMPLATE(
   "Nested spawn and async join never block a worker or migrate the parent",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   const auto mode = test_scheduler();
   for (std::size_t workers : {1, 4}) {
@@ -104,8 +99,7 @@ static weave::Task<bool> join_from_context(weave::JoinHandle<std::unique_ptr<int
 TEST_CASE_TEMPLATE(
   "Join handles support move-only results and awaiting from a standalone context",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   auto runtime = support::create_runtime<Layout>({.workers = 2, .scheduler = test_scheduler()});
   REQUIRE(runtime);
@@ -122,7 +116,7 @@ TEST_CASE_TEMPLATE(
   }
 }
 
-TEST_CASE_TEMPLATE("Concurrent submitters publish results exactly once", Layout, support::ShardedIo, support::SharedIo)
+TEST_CASE_TEMPLATE("Concurrent submitters publish results exactly once", Layout, WEAVE_TEST_IO_LAYOUTS)
 {
   auto runtime = support::create_runtime<Layout>({.workers = 4, .scheduler = test_scheduler()});
   REQUIRE(runtime);
@@ -151,8 +145,7 @@ TEST_CASE_TEMPLATE("Concurrent submitters publish results exactly once", Layout,
 TEST_CASE_TEMPLATE(
   "Discarded handles remain runtime-owned and join drains accepted tasks",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   auto runtime = support::create_runtime<Layout>({.workers = 4, .scheduler = test_scheduler()});
   REQUIRE(runtime);
@@ -166,7 +159,9 @@ TEST_CASE_TEMPLATE(
   }
   runtime->join();
   CHECK(completed == 1000);
-  auto rejected = runtime->spawn([](weave::Context &) -> weave::Task<void> { co_return; });
+  auto rejected = runtime->spawn([](weave::Context &) -> weave::Task<void> {
+    co_return;
+  });
   REQUIRE_FALSE(rejected);
   CHECK(rejected.error() == std::errc::operation_canceled);
   runtime->join();
@@ -175,8 +170,7 @@ TEST_CASE_TEMPLATE(
 TEST_CASE_TEMPLATE(
   "Shutdown cancels pending accept and preserves the result after runtime destruction",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   std::optional<weave::JoinHandle<void>> saved;
   std::atomic<bool> waiting = false;
@@ -205,8 +199,7 @@ TEST_CASE_TEMPLATE(
 TEST_CASE_TEMPLATE(
   "Shutdown drains cancelled reads before reclaiming worker sockets and frames",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   const auto mode = test_scheduler();
   for (bool skip : {false, true}) {
@@ -233,15 +226,13 @@ TEST_CASE_TEMPLATE(
   }
 }
 
-TEST_CASE_TEMPLATE(
-  "A worker may request cooperative stop and later I/O is rejected",
-  Layout,
-  support::ShardedIo,
-  support::SharedIo)
+TEST_CASE_TEMPLATE("A worker may request cooperative stop and later I/O is rejected", Layout, WEAVE_TEST_IO_LAYOUTS)
 {
   auto runtime = support::create_runtime<Layout>({.workers = 2, .scheduler = test_scheduler()});
   REQUIRE(runtime);
-  auto invalid = runtime->spawn_on(2, [](weave::Context &) -> weave::Task<void> { co_return; });
+  auto invalid = runtime->spawn_on(2, [](weave::Context &) -> weave::Task<void> {
+    co_return;
+  });
   REQUIRE_FALSE(invalid);
   CHECK(invalid.error() == std::errc::invalid_argument);
   auto job = runtime->spawn([&runtime](weave::Context &ctx) -> weave::Task<bool> {
@@ -296,8 +287,7 @@ static weave::Task<bool> implicit_runtime_roundtrip()
 TEST_CASE_TEMPLATE(
   "Runtime run resolves implicit TCP setup without a Context-taking factory",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   const auto mode = test_scheduler();
   for (std::size_t workers : {1, 4}) {
@@ -315,8 +305,7 @@ TEST_CASE_TEMPLATE(
 TEST_CASE_TEMPLATE(
   "Implicit TCP connections constructed on the caller execute on all runtime workers",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   const auto mode = test_scheduler();
   for (bool skip : {false, true}) {
@@ -344,8 +333,7 @@ TEST_CASE_TEMPLATE(
 TEST_CASE_TEMPLATE(
   "A captured socket is destroyed on its worker before an external join observes completion",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   support::EchoPeer peer;
   auto runtime = support::create_runtime<Layout>({.workers = 2, .scheduler = test_scheduler()});
@@ -376,8 +364,7 @@ TEST_CASE_TEMPLATE(
 TEST_CASE_TEMPLATE(
   "Stop racing external submissions rejects new tasks and drains every accepted task",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   auto runtime = support::create_runtime<Layout>({.workers = 4, .scheduler = test_scheduler()});
   REQUIRE(runtime);
@@ -419,11 +406,7 @@ TEST_CASE_TEMPLATE(
   CHECK(errors == 0);
 }
 
-TEST_CASE_TEMPLATE(
-  "Scheduler selection is explicit and invalid modes are rejected",
-  Layout,
-  support::ShardedIo,
-  support::SharedIo)
+TEST_CASE_TEMPLATE("Scheduler selection is explicit and invalid modes are rejected", Layout, WEAVE_TEST_IO_LAYOUTS)
 {
   auto normal = support::create_runtime<Layout>({.workers = 1});
   REQUIRE(normal);
@@ -433,11 +416,7 @@ TEST_CASE_TEMPLATE(
   CHECK(invalid.error() == std::errc::invalid_argument);
 }
 
-TEST_CASE_TEMPLATE(
-  "Idle workers steal a burst from a pinned parent's local queue",
-  Layout,
-  support::ShardedIo,
-  support::SharedIo)
+TEST_CASE_TEMPLATE("Idle workers steal a burst from a pinned parent's local queue", Layout, WEAVE_TEST_IO_LAYOUTS)
 {
   auto runtime = support::create_runtime<Layout>({.workers = 4, .scheduler = weave::Scheduler::work_stealing});
   REQUIRE(runtime);
@@ -470,8 +449,7 @@ TEST_CASE_TEMPLATE(
 TEST_CASE_TEMPLATE(
   "A yielded task can migrate with a live socket and retain its original Context reference",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   support::EchoPeer peer;
   auto runtime = support::create_runtime<Layout>({.workers = 2, .scheduler = weave::Scheduler::work_stealing});
@@ -525,8 +503,7 @@ TEST_CASE_TEMPLATE(
 TEST_CASE_TEMPLATE(
   "Stealing serializes when_all children while servicing duplex I/O and joins",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   for (bool skip : {false, true}) {
     auto runtime = support::create_runtime<Layout>(
@@ -573,8 +550,7 @@ TEST_CASE_TEMPLATE(
 TEST_CASE_TEMPLATE(
   "A stealing listener transfers accepted sockets to handlers pinned to another worker",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   for (bool skip : {false, true}) {
     auto runtime = support::create_runtime<Layout>(
@@ -641,8 +617,7 @@ TEST_CASE_TEMPLATE(
 TEST_CASE_TEMPLATE(
   "Both schedulers preserve immediate errors, overlap guards, cancellation and EOF",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   const auto mode = test_scheduler();
   for (bool skip : {false, true}) {
@@ -661,7 +636,7 @@ TEST_CASE_TEMPLATE(
       auto reader = [&]() -> weave::Task<void> {
         std::array<std::byte, 1> data{};
         auto read = co_await weave::as_result(stream->read(data));
-        cancelled = !read && read.error().value() == ERROR_OPERATION_ABORTED;
+        cancelled = !read && read.error().value() == support::native_cancelled;
       };
       auto cancel = [&]() -> weave::Task<void> {
         std::array<std::byte, 1> data{};
@@ -676,7 +651,7 @@ TEST_CASE_TEMPLATE(
       if (!eof || *eof != 0 || !stream->close())
         co_return false;
       auto closed = co_await weave::as_result(stream->read(data));
-      co_return !closed && closed.error().value() == WSAENOTSOCK;
+      co_return !closed && closed.error().value() == support::native_not_socket;
     });
     REQUIRE(job);
     CHECK(std::move(*job).get() == true);
@@ -689,8 +664,7 @@ TEST_CASE_TEMPLATE(
 TEST_CASE_TEMPLATE(
   "Runtime join includes context-owned tasks and closes both submission paths",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   auto runtime = support::create_runtime<Layout>({.workers = 4, .scheduler = test_scheduler()});
   REQUIRE(runtime);
@@ -702,7 +676,9 @@ TEST_CASE_TEMPLATE(
       auto job = ctx.spawn([&, i](weave::Context &local) -> weave::Task<int> {
         while (!release.load(std::memory_order_acquire))
           co_await local.yield();
-        auto rejected = local.spawn([](weave::Context &) -> weave::Task<void> { co_return; });
+        auto rejected = local.spawn([](weave::Context &) -> weave::Task<void> {
+          co_return;
+        });
         CHECK_FALSE(rejected);
         CHECK(rejected.error() == std::errc::operation_canceled);
         ++finished;
@@ -722,7 +698,9 @@ TEST_CASE_TEMPLATE(
     joined.store(true, std::memory_order_release);
   });
   for (;;) {
-    auto probe = runtime->spawn([](weave::Context &) -> weave::Task<void> { co_return; });
+    auto probe = runtime->spawn([](weave::Context &) -> weave::Task<void> {
+      co_return;
+    });
     if (!probe) {
       CHECK(probe.error() == std::errc::operation_canceled);
       break;
@@ -742,8 +720,7 @@ TEST_CASE_TEMPLATE(
 TEST_CASE_TEMPLATE(
   "Runtime shutdown drains context-owned pending sockets under both schedulers",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   const auto mode = test_scheduler();
   for (bool skip : {false, true}) {
@@ -806,11 +783,7 @@ static weave::Task<void> detached_pending_accept(
   FAIL("Detached accept resumed after cancellation");
 }
 
-TEST_CASE_TEMPLATE(
-  "Runtime shutdown drains explicit and scope-detached native work",
-  Layout,
-  support::ShardedIo,
-  support::SharedIo)
+TEST_CASE_TEMPLATE("Runtime shutdown drains explicit and scope-detached native work", Layout, WEAVE_TEST_IO_LAYOUTS)
 {
   const auto mode = test_scheduler();
   const std::array completion_modes{false, true};
@@ -881,6 +854,7 @@ TEST_CASE_TEMPLATE(
   }
 }
 
+#if defined(_WIN32)
 TEST_CASE("Shared IOCP services a pending socket while its original worker is blocked")
 {
   for (bool skip : {false, true}) {
@@ -926,14 +900,17 @@ TEST_CASE("Shared IOCP services a pending socket while its original worker is bl
       std::unique_lock lock(mutex);
       blocked.store(true, std::memory_order_release);
       blocked.notify_one();
-      co_return wake.wait_for(lock, std::chrono::seconds(3), [&] { return completed; });
+      co_return wake.wait_for(lock, std::chrono::seconds(3), [&] {
+        return completed;
+      });
     });
     REQUIRE(blocker);
     blocked.wait(false, std::memory_order_acquire);
     CHECK(support::write_all(client, "q", 1));
     CHECK(std::move(*blocker).get() == true);
     CHECK(std::move(*server).get());
-    closesocket(client);
+    support::close_socket(client);
     runtime->join();
   }
 }
+#endif

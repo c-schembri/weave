@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 #include <weave/tcp.hpp>
 #include <weave/timer.hpp>
+#include <weave/resolve.hpp>
 #include <array>
 
 static weave::Task<void> endpoint_server(weave::TcpListener &listener)
@@ -24,8 +25,10 @@ static weave::Task<void> endpoint_server(weave::TcpListener &listener)
 
 static weave::Task<void> endpoint_client(weave::Endpoint endpoint, bool dns)
 {
-  auto stream = dns ? co_await weave::tcp::connect(std::string("localhost"), endpoint.port)
-                    : co_await weave::tcp::connect(endpoint);
+  std::vector<weave::Endpoint> endpoints{endpoint};
+  if (dns)
+    endpoints = co_await weave::resolve("localhost", endpoint.port, {.family = endpoint.address.family()});
+  auto stream = co_await weave::tcp::connect(std::move(endpoints));
   auto local = stream.local_endpoint();
   auto peer = stream.peer_endpoint();
   if (!local || !peer)

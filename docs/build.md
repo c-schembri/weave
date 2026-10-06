@@ -1,10 +1,12 @@
 # Build And Installation
 
 Windows x64: Visual Studio 2022 with the C++ workload, CMake 3.25+, and Git.
-Core is portable C++23; IO, TCP, and Runtime currently require Windows. Public
+Linux/WSL uses GCC 14+, CMake 3.25+, Ninja and liburing 2.3+. Core is portable;
+networking selects Windows IOCP or Linux io_uring at build time. Public
 targets supply their C++23 requirement. Python 3.11+ is needed only for tests
 and developer automation, without pip packages. Rust is needed only for the
-optional Tokio comparison. Library-only builds download no external dependencies;
+optional Tokio comparison. Linux additionally requires glibc for async DNS.
+Library-only builds download no external dependencies;
 selecting TLS requires a separately installed OpenSSL 3 package.
 
 ## Vendored
@@ -37,7 +39,7 @@ target_link_libraries(my_app PRIVATE weave::tcp)
 
 Only core is header-only; the other components are static libraries. Shared-library
 ABI/export support is not implemented. Public headers are self-contained and have
-no native Windows header dependency.
+no native OS header dependency.
 
 ## Development Presets
 
@@ -49,6 +51,7 @@ no native Windows header dependency.
 | `asan-tls` | `asan-tls` | All correctness tests/examples including TLS under AddressSanitizer |
 | `windows-runtime-bench` | `runtime-bench` (build only) | Only native Weave/Asio runtime servers and common client |
 | `windows` | `debug`, `release` | Full tests, examples, comparisons and benchmark smokes |
+| `linux-debug`, `linux-release`, `linux-asan` | Same name | io_uring correctness tests and examples, including TLS; no benchmarks |
 
 Tests, examples and benchmarks are separate opt-ins: `WEAVE_BUILD_TESTS`,
 `WEAVE_BUILD_EXAMPLES`, `WEAVE_BUILD_BENCHMARKS`. All default off for consumers.
@@ -65,3 +68,5 @@ For ASan, install the MSVC AddressSanitizer component. CTest supplies its runtim
 DLL path. Packaging tests cover isolated modules, relocated consumers, and every
 installed header. See [examples](../modules/tcp/examples/echo/README.md),
 [local runtime scaling](runtime-scaling.md), and [manual benchmarks](benchmarks.md).
+
+See [Linux/WSL](linux.md) for packages, builds, backend requirements and unsupported options.

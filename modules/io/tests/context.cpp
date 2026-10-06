@@ -1,7 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 #include <weave/io.hpp>
-#include "windows/iocp.hpp"
+#include "backend.hpp"
 #include <weave/io/detail/context_access.hpp>
 #include <type_traits>
 
@@ -19,6 +19,7 @@ concept AcceptsEmptyFactoryKey = requires { T({}, {}); };
 
 static_assert(!AcceptsEmptyFactoryKey<weave::Context>);
 
+#if defined(_WIN32)
 static HANDLE WINAPI fail_create_port(HANDLE file, HANDLE existing, ULONG_PTR key, DWORD concurrency)
 {
   CHECK(file == INVALID_HANDLE_VALUE);
@@ -69,6 +70,8 @@ TEST_CASE("Context factory preserves options and owns exactly one completion por
   }
 }
 
+#endif
+
 TEST_CASE("IO context drives yielding tasks without TCP or runtime")
 {
   auto context = weave::Context::create();
@@ -85,7 +88,11 @@ TEST_CASE("IO context drives yielding tasks without TCP or runtime")
   CHECK(context->run(operation()) == 100);
   CHECK(weave::detail::current_context == nullptr);
   CHECK(weave::detail::current_executor == nullptr);
+#if defined(_WIN32)
   CHECK(context->metrics().dequeue_calls == 100);
+#else
+  CHECK(context->metrics().dequeue_calls > 0);
+#endif
 }
 
 TEST_CASE("IO context remains usable after asynchronous failure")
@@ -103,6 +110,7 @@ TEST_CASE("IO context remains usable after asynchronous failure")
   CHECK(context->run(weave::when_all()));
 }
 
+#if defined(_WIN32)
 TEST_CASE("A shared I/O domain outlives its contexts and owns exactly one port")
 {
   HANDLE port;
@@ -127,3 +135,4 @@ TEST_CASE("A shared I/O domain outlives its contexts and owns exactly one port")
   CHECK(GetHandleInformation(port, &flags) == FALSE);
   CHECK(GetLastError() == ERROR_INVALID_HANDLE);
 }
+#endif

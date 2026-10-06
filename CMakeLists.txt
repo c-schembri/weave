@@ -20,6 +20,10 @@ option(WEAVE_PROFILE_RUNTIME "Count coroutine allocations and I/O submissions (n
 option(WEAVE_TRACE_RUNTIME "Record diagnostic execution traces (not for timing comparisons)" OFF)
 option(WEAVE_RECYCLE_FRAMES "Reuse coroutine frames in a bounded thread-local cache" ON)
 
+if(WEAVE_BUILD_BENCHMARKS AND NOT WIN32)
+  message(FATAL_ERROR "The native benchmark harness currently supports Windows only; Linux correctness builds are available.")
+endif()
+
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 include(cmake/WeaveModule.cmake)
@@ -38,8 +42,8 @@ foreach(module IN LISTS WEAVE_MODULES)
   endif()
 endforeach()
 list(REMOVE_DUPLICATES WEAVE_ENABLED_MODULES)
-if("io" IN_LIST WEAVE_ENABLED_MODULES AND NOT WIN32)
-  message(FATAL_ERROR "Weave IO currently implements Windows IOCP only. Linux io_uring is planned. Core is portable.")
+if("io" IN_LIST WEAVE_ENABLED_MODULES AND NOT WIN32 AND NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  message(FATAL_ERROR "Weave IO supports Windows IOCP and Linux io_uring. Core is portable.")
 endif()
 
 if(WEAVE_BUILD_TESTS)
@@ -88,8 +92,10 @@ endif()
 if(WEAVE_FULL_TESTS)
   weave_add_test(weave_tests tests/integration/main.cpp tests/integration/runtime.cpp
     tests/integration/task.cpp tests/integration/task_concurrent.cpp tests/integration/cancellation.cpp
-    tests/integration/serve.cpp tests/integration/endpoints.cpp
-    tests/benchmark_affinity.cpp)
+    tests/integration/serve.cpp tests/integration/endpoints.cpp)
+  if(WIN32)
+    target_sources(weave_tests PRIVATE tests/benchmark_affinity.cpp)
+  endif()
   target_link_libraries(weave_tests PRIVATE weave::tcp weave::runtime)
   target_include_directories(weave_tests PRIVATE test_support)
   target_include_directories(weave_tests SYSTEM PRIVATE ${asio_SOURCE_DIR}/asio/include)

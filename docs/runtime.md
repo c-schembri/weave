@@ -13,9 +13,13 @@ there is no CPU-core pinning and no runtime mode switching.
 auto runtime = weave::Runtime::create({
   .workers = 4,
   .scheduler = weave::Scheduler::work_stealing,
-  .io_layout = weave::IoLayout::shared,
+  .io_layout = weave::IoLayout::sharded,
 });
 ```
+
+Linux supports the sharded layout with both schedulers. Shared IOCP is a
+Windows-only opt-in; Linux rejects `IoLayout::shared` with
+`operation_not_supported`. [Linux execution details](linux.md).
 
 | Mode | spawn | spawn_on(index, task_or_factory) |
 | --- | --- | --- |

@@ -14,7 +14,7 @@ modules/
   core/       Task, Result, numeric types, coroutine frame allocator
   io/         Context, completion engine, task ownership, spawn and JoinHandle
   runtime/    Worker threads, scheduling policies, cross-context coordination
-  tcp/        Sockets, listeners, connect/accept, reads/writes, Winsock lifetime
+  tcp/        Sockets, listeners, connect/accept, reads/writes, native socket lifetime
   sync/       Bounded channels, semaphore permits, cancellation-aware wait queues
   tls/        Optional OpenSSL engine and generic encrypted-stream adapter
 tests/
@@ -137,10 +137,11 @@ TLS, not HTTP. We are establishing those boundaries, not implementing them now.
 
 ## Data and execution
 
-Each Context owns a private backend allocation and a contiguous 64-entry
+The Windows backend described below uses a private allocation and contiguous 64-entry
 completion buffer. Standalone Contexts and sharded runtime workers own their
 IOCP; shared runtime workers borrow one runtime I/O domain's port. The public
-Context has no native OS types.
+Context has no native OS types. Linux uses the same public ownership/execution
+model with an io_uring backend; see the Linux lifetime section below.
 `Context::create(options)` returns `Result<Context>`: IOCP setup errors are returned
 before any Context is published. Guaranteed copy elision constructs the immovable
 Context directly in its owning result, with no extra allocation. A private factory
@@ -250,6 +251,29 @@ shared lifetime allocation per runtime domain, not per operation. Shutdown retai
 all worker Contexts until both scheduled dispatches and dequeued completion batches
 have unwound, including cross-worker publication after a task finishes.
 
+## Linux lifetime rules
+
+Linux Contexts own one liburing ring and one eventfd wake read. The owner alone
+accesses SQ/CQ; migrated task submissions/cancellations arrive as intrusive
+Context messages. Completion posts through the captured executor, not whichever
+thread requested cancellation. No Weave I/O or timer helper threads are added.
+
+The suspended operation embeds native submission, cancellation and continuation
+records. Cancellation records whether a command is queued or awaiting its own
+CQE. Completion does not publish until the original request and any cancellation
+acknowledgement have drained. A successful accepted fd is either attached to the
+original Context or closed if stop/setup wins. Closing an fd is not cancellation.
+
+CQ backpressure temporarily buffers completions without running callbacks under
+native-operation locks. The normal polling path consumes them with the same
+bounded dispatch and lifetime rules. The permanent wake read is also explicitly
+cancelled and drained before ring/storage destruction.
+
+Linux shares the steady-clock timer policy, task ownership, schedulers, Sync and
+TLS adapters. DNS uses glibc notification callbacks retained through cancellation,
+including lookups that cannot be interrupted. Shared I/O layout is rejected,
+not reinterpreted as sharded. [Requirements and build](linux.md).
+
 ## Task completion
 
 `Task<T>` is the only public coroutine type. Its promise stores explicit running,
@@ -301,7 +325,7 @@ This prevents an unrelated same-thread loop from awaiting completions queued to
 another port, and prevents Context-owned tasks from accidentally migrating.
 Synchronous explicit listener setup and cleanup do not require an active loop.
 
-TCP shares IO's private `src/windows/iocp.hpp` backend contract only at build
+TCP shares IO's private `src/windows/iocp.hpp` or `src/linux/uring.hpp` backend contract only at build
 time. This dependency does not enter installed headers or exported include paths.
 Runtime uses a platform-neutral ContextAccess contract. IO routes stolen
 continuations through a non-owning Executor hook, not a hard reference to a
@@ -311,8 +335,8 @@ The runtime retains its existing root serialization and lifetime rules.
 
 The scheduler hook adds no per-operation allocation or virtual object hierarchy.
 This split is structural, not a measured performance improvement; no performance
-parity claim follows from correctness tests. When adding io_uring, keep these
-operation/completion semantics and select the concrete backend at build time.
+parity claim follows from correctness tests. Both native backends preserve these
+operation/completion semantics and are selected at build time.
 
 ## Next evidence to collect
 

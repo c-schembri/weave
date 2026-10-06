@@ -115,8 +115,7 @@ static weave::Task<void> serve_roundtrip(weave::u16 port, int index, ServeState 
 TEST_CASE_TEMPLATE(
   "TCP serve inherits runtime scheduling and drains multicore clients before returning",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   for (auto scheduler : {weave::Scheduler::worker_affine, weave::Scheduler::work_stealing}) {
     for (bool skip : {false, true}) {
@@ -195,8 +194,7 @@ static weave::Task<void> burst_client(
 TEST_CASE_TEMPLATE(
   "A single listener warms up 1024 live clients and drains their disconnect burst",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   constexpr unsigned count = 1024;
   for (bool skip : {false, true}) {
@@ -328,8 +326,7 @@ static weave::Task<void> serve_data_until_cancelled(weave::TcpListener &listener
 TEST_CASE_TEMPLATE(
   "TCP on_data keeps borrowed buffers alive across multicore callbacks and cancellation",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   for (auto scheduler : {weave::Scheduler::worker_affine, weave::Scheduler::work_stealing}) {
     for (bool skip : {false, true}) {

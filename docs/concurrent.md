@@ -144,4 +144,6 @@ The echo fixture's abrupt close can produce either EOF or WSAECONNRESET on
 Windows; both are checked rather than assuming every close is graceful. Existing
 clean half-close, partial I/O, AcceptEx shutdown, and 20,000-deep failure tests
 remain in the suite. Debug, Release, and ASan testing are complementary evidence,
-not proof of race freedom. No Linux or alternate-compiler validation is claimed.
+not proof of race freedom. This section's historical measurements are Windows-only.
+The [Linux backend](linux.md) now runs the same sharded-runtime correctness cases;
+no cross-platform performance comparison is claimed.

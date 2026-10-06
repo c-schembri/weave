@@ -96,5 +96,10 @@ Cancelled operations report `std::errc::operation_canceled`; completion can win
 a cancellation race. `weave::timeout` can bound a lookup cooperatively, but must
 still drain cancellation and is not a hard native teardown deadline.
 
-Public headers contain no Windows types. This implementation currently requires
-the Windows IO backend; Linux resolution/networking is not implemented yet.
+Linux uses glibc's asynchronous `getaddrinfo_a` notification API, with the same
+Context/executor routing and retained query lifetimes. Numeric addresses bypass
+it. Already-running lookups may resist native cancellation; Weave still waits
+for notification before returning cancellation. glibc owns its resolver threads;
+Weave does not run blocking DNS on I/O workers. [Linux details](linux.md).
+
+Public headers contain no native OS types.

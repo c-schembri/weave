@@ -28,8 +28,7 @@ static weave::Scheduler cancellation_scheduler()
 TEST_CASE_TEMPLATE(
   "Timeout drains AcceptEx and a pending read before the socket is reused",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   for (bool skip : {false, true}) {
     auto runtime = support::create_runtime<Layout>(
@@ -65,8 +64,7 @@ TEST_CASE_TEMPLATE(
 TEST_CASE_TEMPLATE(
   "Cancelling an individual root drains native accept without stopping the runtime",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   auto runtime = support::create_runtime<Layout>({.workers = 4, .scheduler = cancellation_scheduler()});
   REQUIRE(runtime);
@@ -102,8 +100,7 @@ TEST_CASE_TEMPLATE(
 TEST_CASE_TEMPLATE(
   "Per-operation cancellation does not cancel a sibling write on the same socket",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   auto runtime = support::create_runtime<Layout>({.workers = 4, .scheduler = cancellation_scheduler()});
   REQUIRE(runtime);
@@ -118,7 +115,9 @@ TEST_CASE_TEMPLATE(
       REQUIRE_FALSE(result);
       CHECK(result.error() == std::errc::timed_out);
     };
-    auto write = [&]() -> weave::Task<void> { co_await socket.write_all(payload); };
+    auto write = [&]() -> weave::Task<void> {
+      co_await socket.write_all(payload);
+    };
     auto receive = [&]() -> weave::Task<void> {
       co_await weave::sleep_for(5ms);
       std::vector<std::byte> buffer(payload.size());
@@ -133,8 +132,7 @@ TEST_CASE_TEMPLATE(
 TEST_CASE_TEMPLATE(
   "Multicore cancellation and expiry races publish each timer outcome once",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   auto runtime = support::create_runtime<Layout>({.workers = 4, .scheduler = cancellation_scheduler()});
   REQUIRE(runtime);
@@ -171,11 +169,7 @@ TEST_CASE_TEMPLATE(
   CHECK(runtime->run(weave::sleep_for(1ms)));
 }
 
-TEST_CASE_TEMPLATE(
-  "A write timeout drains native buffer ownership before stream close",
-  Layout,
-  support::ShardedIo,
-  support::SharedIo)
+TEST_CASE_TEMPLATE("A write timeout drains native buffer ownership before stream close", Layout, WEAVE_TEST_IO_LAYOUTS)
 {
   auto runtime = support::create_runtime<Layout>({.workers = 4, .scheduler = cancellation_scheduler()});
   REQUIRE(runtime);
@@ -196,8 +190,7 @@ TEST_CASE_TEMPLATE(
 TEST_CASE_TEMPLATE(
   "A failed scope retains body-local TCP buffers until cancelled child I/O drains",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   auto runtime = support::create_runtime<Layout>({.workers = 4, .scheduler = cancellation_scheduler()});
   REQUIRE(runtime);
@@ -241,8 +234,7 @@ TEST_CASE_TEMPLATE(
 TEST_CASE_TEMPLATE(
   "Scopes inherit runtime scheduling and drain concurrent borrowed child data",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   auto runtime = support::create_runtime<Layout>({.workers = 4, .scheduler = cancellation_scheduler()});
   REQUIRE(runtime);
@@ -264,8 +256,7 @@ TEST_CASE_TEMPLATE(
 TEST_CASE_TEMPLATE(
   "Shutdown drains grouped detached timers under both schedulers and I/O layouts",
   Layout,
-  support::ShardedIo,
-  support::SharedIo)
+  WEAVE_TEST_IO_LAYOUTS)
 {
   auto runtime = support::create_runtime<Layout>({.workers = 4, .scheduler = cancellation_scheduler()});
   REQUIRE(runtime);

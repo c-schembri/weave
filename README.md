@@ -4,8 +4,8 @@
 
 Async networking for C++23. Small APIs, explicit ownership, no exceptions.
 
-**Experimental.** Windows IOCP is implemented; Linux io_uring is planned.
-Not production-ready. No Linux or macOS networking backend yet.
+**Experimental.** Windows IOCP and Linux io_uring backends are implemented.
+Not production-ready. No epoll or macOS backend.
 
 ## Start Here
 
@@ -41,8 +41,9 @@ automatically; synchronous setup and `run()` return `Result<T>` (`std::expected`
 each client's receive buffer and waits for its callback before reading again.
 
 Windows x64, Visual Studio 2022 C++ workload, CMake 3.25+, Git, and Python 3.11+
-for tests. No Python or third-party dependencies for library-only builds unless
-the optional TLS component is selected.
+for tests. Linux uses GCC 14+ with liburing 2.3+ and a kernel supporting io_uring.
+Python is not needed for library-only builds; OpenSSL 3 is required only for TLS.
+[Linux/WSL setup and current limitations](docs/linux.md).
 
 ```sh
 git clone https://github.com/c-schembri/weave.git
