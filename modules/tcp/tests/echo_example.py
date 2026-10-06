@@ -10,6 +10,7 @@ import socket
 import struct
 import subprocess
 import sys
+import traceback
 
 
 def require(condition, message):
@@ -39,6 +40,10 @@ async def server(executable, port):
     capture = asyncio.create_task(capture_output())
     try:
         yield process, first_line
+    except Exception:
+        print(f"Echo server failure: executable={executable.name}, argument={port!r}, "
+              f"pid={process.pid}, exit_code={process.returncode}", file=sys.stderr)
+        raise
     finally:
         if process.returncode is None:
             process.kill()
@@ -196,7 +201,8 @@ def main():
         asyncio.run(check(args.executable.resolve(strict=True), args.usage_exit_code))
         return 0
     except (OSError, RuntimeError, TimeoutError, asyncio.IncompleteReadError) as error:
-        print(f"Error: {error}", file=sys.stderr)
+        print(f"Error: {type(error).__name__}: {error}", file=sys.stderr)
+        traceback.print_exc()
         return 1
 
 

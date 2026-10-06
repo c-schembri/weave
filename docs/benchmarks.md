@@ -1,5 +1,9 @@
 # Benchmark methodology
 
+For the short, automatic Windows Weave/Asio/Tokio comparison and README publication,
+see the [CI benchmark protocol](ci-benchmarks.md). The broader suites below remain
+manual opt-ins; correctness CI does not run them.
+
 The suite compares Weave and standalone Asio 1.36.0 with C++ coroutines,
 libuv 1.53.0 with its native TCP callbacks, and uSockets at `7a7c820` with
 native callbacks over its libuv backend. All clients disable exceptions.
@@ -45,7 +49,7 @@ all seven distinct repetitions, at least 1000 RTT samples and progress from ever
 connection. JSON retains raw evidence, source/binary hashes, medians, CVs, CPU per
 operation, p50/p99/p99.9 and exploratory 90% bootstrap intervals. These short,
 closed-loop measurements are diagnostic, not proof of a universal performance
-advantage or a default-promotion gate. No benchmarks run in automatic CI.
+advantage or a default-promotion gate. This IOCP-layout experiment does not run in automatic CI.
 
 GetProcessTimes CPU seconds can be coarse/noisy in these short windows, including
 zero medians. Do not interpret those as zero CPU cost; compare recorded process

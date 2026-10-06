@@ -25,11 +25,14 @@ co_await weave::tcp::serve(
   });
 ```
 
-`ServeOptions` defaults to backlog `512` and `no_delay = false`. TCP_NODELAY is
+`ServeOptions` defaults to backlog `512`, `no_delay = false`, and `ipv6_only = true`. TCP_NODELAY is
 configured before dispatch; configuration failures close the accepted stream and
 fail the server just like `accept()` failures. Startup is lazy and resolves the
 executing Context, like contextless `listen()`. The endpoint string is borrowed
 until listener setup finishes.
+
+Numeric IPv6 and owned `Endpoint` overloads are supported. See
+[addresses and DNS](addresses.md) for dual-stack listening and endpoint queries.
 
 ## Buffered Data Handlers
 

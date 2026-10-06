@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 #include <weave/tcp.hpp>
+#include <weave/timer.hpp>
 #include "echo_peer.hpp"
 #include "windows/iocp.hpp"
 #include <atomic>
@@ -106,7 +107,7 @@ TEST_CASE("Invalid endpoints and conflicting binds report values")
   REQUIRE(ctx);
 
   CHECK_FALSE(weave::tcp::listen(*ctx, "not-an-ip", 0));
-  CHECK_FALSE(ctx->run(weave::tcp::connect(*ctx, "not-an-ip", 80)));
+  CHECK_FALSE(ctx->run(weave::tcp::connect(*ctx, "bad host", 80)));
   auto first = weave::tcp::listen(*ctx, "127.0.0.1", 0);
   REQUIRE(first);
   auto port = first->local_port();
@@ -129,6 +130,43 @@ TEST_CASE("ConnectEx refusal becomes an error completion")
   REQUIRE(listener->close());
   CHECK_FALSE(ctx->run(weave::tcp::connect(*ctx, "127.0.0.1", port)));
   CHECK(ctx->metrics().submitted == ctx->metrics().completed);
+}
+
+TEST_CASE("Explicit listen backlogs retain more than 200 unaccepted connections")
+{
+  constexpr unsigned count = 512;
+  for (int backlog : {512, 8192}) {
+    for (bool skip : {false, true}) {
+      CAPTURE(backlog);
+      CAPTURE(skip);
+      auto ctx = weave::Context::create({.skip_successful_completions = skip});
+      REQUIRE(ctx);
+      auto listener = weave::tcp::listen(*ctx, "127.0.0.1", 0, backlog);
+      REQUIRE(listener);
+
+      auto queue = [&](weave::TaskScope &pending) -> weave::Task<void> {
+        std::vector<weave::JoinHandle<weave::TcpStream>> connections;
+        connections.reserve(count);
+        for (unsigned i = 0; i < count; ++i) {
+          auto connection = pending.spawn(weave::tcp::connect(*ctx, "127.0.0.1", listener->local_port()));
+          if (!connection)
+            co_await weave::fail(connection.error());
+          connections.push_back(std::move(*connection));
+        }
+
+        // Keep every client open, without accepting: retries cannot empty the listener queue.
+        std::vector<weave::TcpStream> clients;
+        clients.reserve(count);
+        for (auto &connection : connections)
+          clients.push_back(co_await std::move(connection));
+        CHECK(clients.size() == count);
+      };
+      auto result = ctx->run(weave::timeout(std::chrono::seconds(5), weave::scope(queue)));
+      CAPTURE(result ? 0 : result.error().value());
+      REQUIRE(result);
+      CHECK(ctx->metrics().submitted == ctx->metrics().completed);
+    }
+  }
 }
 
 TEST_CASE("TCP roundtrip preserves payload across sizes and partial receives")

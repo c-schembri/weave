@@ -8,6 +8,10 @@
 #include <weave/core.hpp>
 #endif
 #include <weave/port.hpp>
+#if defined(WEAVE_USE_IO) || defined(WEAVE_USE_RUNTIME) || defined(WEAVE_USE_TCP)
+#include <weave/address.hpp>
+#include <weave/resolve.hpp>
+#endif
 
 #if defined(_WINDOWS_) || defined(_WINSOCKAPI_) || defined(_WINSOCK2API_)
 #error Public header leaked Windows headers
@@ -130,6 +134,12 @@ int main()
   auto context = weave::Context::create();
   if (!context)
     return 1;
+  auto address = weave::IpAddress::parse("::1");
+  if (!address || address->to_string() != "::1")
+    return 4;
+  auto endpoints = context->run(weave::resolve("localhost", 8080));
+  if (!endpoints || endpoints->empty() || endpoints->front().port != 8080)
+    return 4;
   auto inherited = context->run(scoped_detach_values());
   if (!inherited)
     return 2;

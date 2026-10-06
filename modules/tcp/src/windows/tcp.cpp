@@ -1,6 +1,8 @@
 #include <winsock2.h>
 #include <weave/tcp.hpp>
 #include "windows/iocp.hpp"
+#include "windows/address.hpp"
+#include <weave/resolve.hpp>
 #include <mswsock.h>
 #include <ws2tcpip.h>
 #include <algorithm>
@@ -32,18 +34,6 @@ Error invalid()
 Error busy()
 {
   return std::make_error_code(std::errc::operation_in_progress);
-}
-
-Result<sockaddr_in> address(const char *ipv4, u16 port)
-{
-  sockaddr_in result{};
-  result.sin_family = AF_INET;
-  result.sin_port = htons(port);
-
-  if (!ipv4 || InetPtonA(AF_INET, ipv4, &result.sin_addr) != 1)
-    return std::unexpected(invalid());
-
-  return result;
 }
 
 template <class T>
@@ -97,10 +87,11 @@ struct TcpIoAwaiter {
   SOCKET socket;
   WSABUF buffer{};
   SOCKET accepted = INVALID_SOCKET;
-  sockaddr_in endpoint{};
+  const detail::SocketAddress *endpoint = nullptr;
   LPFN_ACCEPTEX accept_fn = nullptr;
   LPFN_CONNECTEX connect_fn = nullptr;
-  std::array<std::byte, 2 * (sizeof(sockaddr_in) + 16)> addresses{};
+  std::array<std::byte, 2 * (sizeof(sockaddr_in6) + 16)> addresses{};
+  DWORD address_bytes = sizeof(sockaddr_in) + 16;
   CancelToken cancellation;
 
   struct CancelOperation {
@@ -177,22 +168,15 @@ struct TcpIoAwaiter {
         accepted,
         addresses.data(),
         0,
-        sizeof(sockaddr_in) + 16,
-        sizeof(sockaddr_in) + 16,
+        address_bytes,
+        address_bytes,
         &bytes,
         &operation.overlapped);
       result = succeeded ? 0 : SOCKET_ERROR;
       break;
     }
     case connect: {
-      auto succeeded = connect_fn(
-        socket,
-        reinterpret_cast<sockaddr *>(&endpoint),
-        sizeof(endpoint),
-        nullptr,
-        0,
-        &bytes,
-        &operation.overlapped);
+      auto succeeded = connect_fn(socket, endpoint->data(), endpoint->size, nullptr, 0, &bytes, &operation.overlapped);
       result = succeeded ? 0 : SOCKET_ERROR;
       break;
     }
@@ -270,7 +254,7 @@ struct TcpIoAwaiter {
   }
 };
 
-Result<SOCKET> make_socket(Context &context, bool &skip_success)
+Result<SOCKET> make_socket(Context &context, bool &skip_success, int family)
 {
   detail::IoAccess::check_thread(context);
   if (context.stop_requested())
@@ -281,7 +265,7 @@ Result<SOCKET> make_socket(Context &context, bool &skip_success)
   if (auto code = WSAStartup(MAKEWORD(2, 2), &data); code != 0)
     return std::unexpected(win_error(code));
 
-  SOCKET socket = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED);
+  SOCKET socket = WSASocketW(family, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED);
   if (socket == INVALID_SOCKET) {
     auto error = last_error();
     WSACleanup();
@@ -338,15 +322,34 @@ Task<TcpStream> tcp::connect(const char *ipv4, u16 port)
   co_return co_await tcp::connect(*ctx, ipv4, port);
 }
 
-Result<TcpListener> tcp::listen(Context &context, const char *ipv4, u16 port, int backlog)
+Task<TcpListener> tcp::listen(Endpoint endpoint, ListenOptions options)
+{
+  auto *ctx = detail::current_context;
+  detail::require(ctx != nullptr);
+  auto listener = tcp::listen(*ctx, endpoint, options);
+  if (!listener)
+    co_await fail(listener.error());
+  co_return std::move(*listener);
+}
+
+Result<TcpListener> tcp::listen(Context &context, const char *address, u16 port, int backlog)
 {
   detail::IoAccess::check_thread(context);
-  auto endpoint = address(ipv4, port);
+  if (!address)
+    return std::unexpected(invalid());
+  auto endpoint = Endpoint::parse(address, port);
   if (!endpoint)
     return std::unexpected(endpoint.error());
+  return tcp::listen(context, *endpoint, {.backlog = backlog});
+}
+
+Result<TcpListener> tcp::listen(Context &context, Endpoint endpoint, ListenOptions options)
+{
+  detail::IoAccess::check_thread(context);
+  auto native = detail::socket_address(endpoint);
 
   bool skip_success = false;
-  auto socket = make_socket(context, skip_success);
+  auto socket = make_socket(context, skip_success, native.data()->sa_family);
   if (!socket)
     return std::unexpected(socket.error());
 
@@ -361,39 +364,113 @@ Result<TcpListener> tcp::listen(Context &context, const char *ipv4, u16 port, in
   if (configured != 0)
     return std::unexpected(last_error());
 
-  auto bound = bind(*socket, reinterpret_cast<const sockaddr *>(&*endpoint), sizeof(*endpoint));
+  if (endpoint.address.is_v6()) {
+    DWORD only = options.ipv6_only;
+    if (setsockopt(*socket, IPPROTO_IPV6, IPV6_V6ONLY, reinterpret_cast<const char *>(&only), sizeof(only)) != 0)
+      return std::unexpected(last_error());
+  }
+
+  auto bound = bind(*socket, native.data(), native.size);
   if (bound != 0)
     return std::unexpected(last_error());
 
-  auto listening = ::listen(*socket, backlog);
+  // Ordinary positive backlogs can be silently capped at 200 by Winsock.
+  auto native_backlog = options.backlog;
+  if (options.backlog > 200 && options.backlog != SOMAXCONN)
+    native_backlog = SOMAXCONN_HINT((std::min)(options.backlog, 65535));
+  auto listening = ::listen(*socket, native_backlog);
   if (listening != 0)
     return std::unexpected(last_error());
 
-  sockaddr_in local{};
+  sockaddr_storage local{};
   int size = sizeof(local);
   if (getsockname(*socket, reinterpret_cast<sockaddr *>(&local), &size) != 0)
     return std::unexpected(last_error());
-  listener.port_ = ntohs(local.sin_port);
+  auto bound_endpoint = detail::socket_endpoint(reinterpret_cast<sockaddr *>(&local), size);
+  if (!bound_endpoint)
+    return std::unexpected(bound_endpoint.error());
+  listener.local_ = *bound_endpoint;
 
   return listener;
 }
 
-Task<TcpStream> tcp::connect(Context &context, const char *ipv4, u16 port)
+Task<TcpStream> tcp::connect(Context &context, const char *host, u16 port)
 {
   detail::IoAccess::check_execution(context);
-  auto endpoint = address(ipv4, port);
-  if (!endpoint)
-    co_return std::unexpected(endpoint.error());
+  if (!host)
+    co_await fail(invalid());
+  auto numeric = Endpoint::parse(host, port);
+  if (numeric)
+    co_return co_await tcp::connect(context, *numeric);
+  auto endpoints = co_await resolve(context, std::string(host), port);
+  co_return co_await tcp::connect(context, std::move(endpoints));
+}
+
+Task<TcpStream> tcp::connect(Context &context, std::string host, u16 port)
+{
+  detail::IoAccess::check_execution(context);
+  if (host.find('\0') != std::string::npos)
+    co_await fail(invalid());
+  co_return co_await tcp::connect(context, host.c_str(), port);
+}
+
+Task<TcpStream> tcp::connect(std::string host, u16 port)
+{
+  auto *context = detail::current_context;
+  detail::require(context != nullptr);
+  co_return co_await tcp::connect(*context, std::move(host), port);
+}
+
+Task<TcpStream> tcp::connect(Endpoint endpoint)
+{
+  auto *context = detail::current_context;
+  detail::require(context != nullptr);
+  co_return co_await tcp::connect(*context, endpoint);
+}
+
+Task<TcpStream> tcp::connect(std::vector<Endpoint> endpoints)
+{
+  auto *context = detail::current_context;
+  detail::require(context != nullptr);
+  co_return co_await tcp::connect(*context, std::move(endpoints));
+}
+
+Task<TcpStream> tcp::connect(Context &context, std::vector<Endpoint> endpoints)
+{
+  detail::IoAccess::check_execution(context);
+  if (endpoints.empty())
+    co_await fail(invalid());
+  Error error;
+  for (auto endpoint : endpoints) {
+    co_await cancellation_point();
+    if (context.stop_requested())
+      co_await fail(std::errc::operation_canceled);
+    auto connected = co_await as_result(tcp::connect(context, endpoint));
+    if (connected)
+      co_return std::move(*connected);
+    error = connected.error();
+    if (error == std::errc::operation_canceled)
+      co_await fail(error);
+  }
+  co_await fail(error);
+}
+
+Task<TcpStream> tcp::connect(Context &context, Endpoint endpoint)
+{
+  detail::IoAccess::check_execution(context);
+  co_await cancellation_point();
+  if (context.stop_requested())
+    co_await fail(std::errc::operation_canceled);
+  auto native = detail::socket_address(endpoint);
 
   bool skip_success = false;
-  auto socket = make_socket(context, skip_success);
+  auto socket = make_socket(context, skip_success, native.data()->sa_family);
   if (!socket)
     co_return std::unexpected(socket.error());
 
   TcpStream stream(context, *socket, skip_success);
-  sockaddr_in local{};
-  local.sin_family = AF_INET;
-  auto bound = bind(*socket, reinterpret_cast<sockaddr *>(&local), sizeof(local));
+  auto local = detail::socket_address({endpoint.address.is_v4() ? IpAddress::any_v4() : IpAddress::any_v6(), 0});
+  auto bound = bind(*socket, local.data(), local.size);
   if (bound != 0)
     co_return std::unexpected(last_error());
 
@@ -402,7 +479,7 @@ Task<TcpStream> tcp::connect(Context &context, const char *ipv4, u16 port)
     co_return std::unexpected(function.error());
 
   TcpIoAwaiter operation(TcpIoAwaiter::connect, context, *socket, skip_success);
-  operation.endpoint = *endpoint;
+  operation.endpoint = &native;
   operation.connect_fn = *function;
 
   auto connected = co_await operation;
@@ -466,6 +543,26 @@ Result<void> TcpStream::shutdown_send()
     return std::unexpected(last_error());
 
   return {};
+}
+
+Result<Endpoint> TcpStream::local_endpoint() const
+{
+  detail::IoAccess::check_thread(*ctx_);
+  sockaddr_storage address{};
+  int size = sizeof(address);
+  if (getsockname(socket_, reinterpret_cast<sockaddr *>(&address), &size) != 0)
+    return std::unexpected(last_error());
+  return detail::socket_endpoint(reinterpret_cast<sockaddr *>(&address), size);
+}
+
+Result<Endpoint> TcpStream::peer_endpoint() const
+{
+  detail::IoAccess::check_thread(*ctx_);
+  sockaddr_storage address{};
+  int size = sizeof(address);
+  if (getpeername(socket_, reinterpret_cast<sockaddr *>(&address), &size) != 0)
+    return std::unexpected(last_error());
+  return detail::socket_endpoint(reinterpret_cast<sockaddr *>(&address), size);
 }
 
 Result<void> TcpStream::cancel()
@@ -561,7 +658,7 @@ TcpListener::TcpListener(TcpListener &&other) noexcept : ctx_(other.ctx_), socke
 {
   detail::require(!other.accepting_);
   socket_ = std::exchange(other.socket_, INVALID_SOCKET);
-  port_ = std::exchange(other.port_, u16{0});
+  local_ = std::exchange(other.local_, Endpoint{});
   skip_success_ = other.skip_success_;
 }
 
@@ -610,7 +707,7 @@ Task<TcpStream> TcpListener::accept(AcceptOptions options)
     co_return std::unexpected(function.error());
 
   bool skip_success = false;
-  auto socket = make_socket(*ctx_, skip_success);
+  auto socket = make_socket(*ctx_, skip_success, local_.address.is_v4() ? AF_INET : AF_INET6);
   if (!socket)
     co_return std::unexpected(socket.error());
 
@@ -618,6 +715,7 @@ Task<TcpStream> TcpListener::accept(AcceptOptions options)
   TcpIoAwaiter operation(TcpIoAwaiter::accept, *ctx_, socket_, skip_success_);
   operation.accepted = *socket;
   operation.accept_fn = *function;
+  operation.address_bytes = local_.address.is_v4() ? sizeof(sockaddr_in) + 16 : sizeof(sockaddr_in6) + 16;
 
   auto accepted = co_await operation;
   if (!accepted)

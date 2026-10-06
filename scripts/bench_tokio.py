@@ -91,25 +91,30 @@ def validate_sample(sample, *, smoke=False):
             "Throughput does not match sample count.")
     require(sample["p50_us"] <= sample["p95_us"] <= sample["p99_us"] <= sample["p999_us"] <= sample["max_us"],
             "Invalid latency percentiles.")
-    require(sample["server_cores"] <= 4.5, "Server exceeded its four-core CPU budget.")
+    workers = sample.get("server_workers", 4)
+    require(type(workers) is int and 1 <= workers <= 32, "Invalid server worker count.")
+    require(sample["server_cores"] <= workers + 0.5, "Server exceeded its CPU budget.")
     require(sample["server_cycles_per_op"] > 0 and sample["client_cycles_per_op"] > 0, "Missing process cycle measurements.")
 
 
 def measure(args, backend, workload, repetition, masks):
     name, connections, size, work, uneven = workload
     prefix = args.output_directory / f"{name}-{repetition:02d}-{backend}"
-    common = [size, work, int(uneven), masks["server"]]
+    workers = getattr(args, "server_workers", 4)
+    common = [size, work, int(uneven), masks["server"], workers]
     server_command = [args.tokio_binary, *common] if backend == "tokio" else [args.server_binary, backend, *common]
     server = client = None
     phase = "server startup"
     try:
         server = Child(server_command, prefix.with_suffix(".server.log"))
         ready = json.loads(server.line())
-        require(ready.get("workers") == 4 and 0 < ready.get("port", 0) <= 65535, "Invalid server readiness.")
+        require(ready.get("workers") == workers and 0 < ready.get("port", 0) <= 65535, "Invalid server readiness.")
         phase = "client setup/warmup"
-        client = Child([args.load_binary, ready["port"], connections, size, work, int(uneven),
-                        args.duration_ms, masks["client"], args.client_workers],
-                       prefix.with_suffix(".client.log"), control=True)
+        client_command = [args.load_binary, ready["port"], connections, size, work, int(uneven),
+                          args.duration_ms, masks["client"], args.client_workers]
+        if warmup_ms := getattr(args, "warmup_ms", 0):
+            client_command.append(warmup_ms)
+        client = Child(client_command, prefix.with_suffix(".client.log"), control=True)
         require(client.line() == "READY", "Invalid client warmup/readiness.")
         phase = "measurement"
         before = counters(server.process)
@@ -121,6 +126,7 @@ def measure(args, backend, workload, repetition, masks):
         cpu = after["cpu_seconds"] - before["cpu_seconds"]
         sample.update({"backend": backend, "workload": name, "repetition": repetition,
                        "connections": connections, "bytes": size, "cpu_iterations": work, "uneven": uneven,
+                       "server_workers": workers,
                        "server_cores": cpu / sample["wall_seconds"],
                        "server_cpu_us_per_op": cpu * 1e6 / sample["samples"],
                        "server_cycles_per_op": (after["cycles"] - before["cycles"]) / sample["samples"],
@@ -128,10 +134,13 @@ def measure(args, backend, workload, repetition, masks):
                        "server_working_set_mb": after["working_set_bytes"] / (1024 * 1024)})
         validate_sample(sample, smoke=args.smoke)
         require(server.process.poll() is None, "Server exited during measurement.")
-        phase = "cleanup"
+        phase = "server cleanup"
         server.close()
         server = None
+        phase = "client socket cleanup"
         client.send("STOP")
+        require(client.line(timeout=25) == "CLOSED", "Client sockets did not finish cleanup.")
+        phase = "client process exit"
         require(client.process.wait(timeout=5) == 0, "Client cleanup failed.")
         return sample
     except Exception as error:

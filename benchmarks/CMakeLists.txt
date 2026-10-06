@@ -4,6 +4,27 @@ if(NOT TARGET weave_io)
   message(FATAL_ERROR "The comparison harness requires io in WEAVE_MODULES. The core library and tests do not.")
 endif()
 
+function(weave_configure_network_comparison target)
+  target_link_libraries(${target} PRIVATE weave::core ws2_32 mswsock)
+  target_include_directories(${target} PRIVATE
+    "${PROJECT_SOURCE_DIR}/benchmarks/support" "${PROJECT_SOURCE_DIR}/test_support")
+  target_include_directories(${target} SYSTEM PRIVATE "${asio_SOURCE_DIR}/asio/include")
+  target_compile_definitions(${target} PRIVATE ASIO_STANDALONE ASIO_NO_EXCEPTIONS
+    WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0602)
+  weave_no_exceptions(${target})
+endfunction()
+
+if(WEAVE_BENCHMARK_SUITE STREQUAL "ci")
+  if(NOT TARGET weave_tcp OR NOT TARGET weave_runtime)
+    message(FATAL_ERROR "The CI comparison requires tcp and runtime in WEAVE_MODULES")
+  endif()
+  add_subdirectory("${PROJECT_SOURCE_DIR}/modules/tcp/benchmarks" "${PROJECT_BINARY_DIR}/modules/tcp/benchmarks")
+  add_executable(weave_runtime_load support/runtime_load.cpp)
+  weave_configure_network_comparison(weave_runtime_load)
+  set_target_properties(weave_runtime_load PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/$<CONFIG>")
+  return()
+endif()
+
 set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
 set(BENCHMARK_ENABLE_EXCEPTIONS OFF CACHE BOOL "" FORCE)
 set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
@@ -44,14 +65,8 @@ if(TARGET weave_tcp OR TARGET weave_runtime)
 endif()
 
 function(weave_configure_benchmark target)
-  target_link_libraries(${target} PRIVATE weave::core benchmark::benchmark)
-  target_link_libraries(${target} PRIVATE ws2_32 mswsock)
-  target_include_directories(${target} PRIVATE
-    "${PROJECT_SOURCE_DIR}/benchmarks/support" "${PROJECT_SOURCE_DIR}/test_support")
-  target_include_directories(${target} SYSTEM PRIVATE "${asio_SOURCE_DIR}/asio/include")
-  target_compile_definitions(${target} PRIVATE ASIO_STANDALONE ASIO_NO_EXCEPTIONS
-    WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0602)
-  weave_no_exceptions(${target})
+  weave_configure_network_comparison(${target})
+  target_link_libraries(${target} PRIVATE benchmark::benchmark)
 endfunction()
 
 function(weave_benchmark_group module)

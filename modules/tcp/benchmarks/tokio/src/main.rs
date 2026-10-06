@@ -41,12 +41,17 @@ async fn session(mut client: TcpStream, config: Workload) -> io::Result<()> {
     }
 }
 
-async fn serve(config: Workload) -> io::Result<()> {
+async fn serve(config: Workload, workers: usize) -> io::Result<()> {
     let socket = TcpSocket::new_v4()?;
     socket.bind("127.0.0.1:0".parse().unwrap())?;
-    let listener = socket.listen(8192)?;
+    // Tokio passes this u32 to Winsock as i32: SOMAXCONN_HINT(8192) is -8192.
+    #[cfg(windows)]
+    let backlog = (-8192_i32) as u32;
+    #[cfg(not(windows))]
+    let backlog = 8192;
+    let listener = socket.listen(backlog)?;
     println!(
-        "{{\"port\":{},\"workers\":4}}",
+        "{{\"port\":{},\"workers\":{workers}}}",
         listener.local_addr()?.port()
     );
     io::stdout().flush()?;
@@ -67,14 +72,19 @@ async fn serve(config: Workload) -> io::Result<()> {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().collect();
-    if args.len() != 5 {
-        return Err("Usage: weave-tokio-bench bytes cpu uneven affinity-mask".into());
+    if args.len() != 5 && args.len() != 6 {
+        return Err("Usage: weave-tokio-bench bytes cpu uneven affinity-mask [workers]".into());
     }
     let bytes = args[1].parse()?;
     let work = args[2].parse()?;
     let uneven: u8 = args[3].parse()?;
     let mask: usize = args[4].parse()?;
-    if !(16..=65536).contains(&bytes) || work > 2_000_000 || uneven > 1 {
+    let workers = if args.len() == 6 { args[5].parse()? } else { 4 };
+    if !(16..=65536).contains(&bytes)
+        || work > 2_000_000
+        || uneven > 1
+        || !(1..=32).contains(&workers)
+    {
         return Err("Invalid workload".into());
     }
     #[cfg(windows)]
@@ -87,11 +97,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         uneven: uneven != 0,
     };
     let runtime = Builder::new_multi_thread()
-        .worker_threads(4)
+        .worker_threads(workers)
         .enable_io()
         .build()?;
     // Schedule the accept loop on a worker too; block_on itself is not a worker task.
-    runtime.block_on(runtime.spawn(serve(config)))??;
+    runtime.block_on(runtime.spawn(serve(config, workers)))??;
     Ok(())
 }
 

@@ -92,8 +92,11 @@
   or when explicitly requested. Routine style, naming, documentation, and linkage
   changes need applicable builds and correctness tests, not timing runs or tables.
   Existing benchmark smoke tests validate correctness, not performance.
-- Automatic CI must configure WEAVE_BUILD_BENCHMARKS=OFF and run correctness tests
-  only. Do not schedule benchmark smokes or performance gates on pushes or PRs.
+- Correctness CI configures WEAVE_BUILD_BENCHMARKS=OFF and excludes benchmark
+  smokes. The separate Windows benchmark workflow runs only scripts/bench_ci.py's
+  fixed, five-minute Weave/Asio/Tokio protocol. Do not add long research benchmarks
+  or the migration gate to automatic CI. Publish complete main-branch summaries
+  in README; retain raw evidence as artifacts, and label noisy results inconclusive.
 - When benchmarking, compare against the pinned Asio baseline using the same
   workload and build. Report regressions and uncertainty. Do not claim wins from
   noisy single runs.
@@ -115,8 +118,22 @@
   resumptions through existing executor/affinity machinery. Do not introduce timer threads
   or periodic polling. Timeouts cancel and drain losers; they are not hard deadlines for
   uncooperative CPU work or foreign awaiters.
+- Common addresses/endpoints and async DNS belong to IO, not TCP or Runtime.
+  Keep public headers free of native types. Numeric input must bypass DNS;
+  IPv6 listeners default to v6-only with explicit dual-stack opt-in. Resolver
+  callbacks route through the existing Context/executor, retain query/results
+  through completion, and synchronize cancellation before releasing storage.
+  Test native resolver races through a per-query private injection boundary,
+  not global backend overrides or external/public DNS dependencies in CI.
 - Add tests for immediate failure, pending completion, EOF, partial I/O, and
   cancellation when changing those paths. Run Debug and Release CTest.
+- Use ad hoc tests and diagnostic probes while investigating, but delete their
+  temporary source files, scripts, and fixtures before committing. Never leave
+  scratch tests in the repository. Retain relevant evidence only in ignored output
+  directories or a curated summary.
+- Add permanent unit/regression tests at the end, after the feature or fix has
+  been fully confirmed and the implementation is locked in. Do not turn exploratory
+  hypotheses into committed tests; final tests must cover the confirmed behavior.
 - Keep API documentation honest about unsupported features and fatal contracts.
 - Do not implement TLS, HTTP parsing, or cryptography from scratch.
 - Do not commit build products or benchmark result artifacts. benchmarks/results/
@@ -136,7 +153,8 @@
   descendant cleanup, evidence validation, fixed statistical protocol, and exit codes.
   Never overwrite archived benchmark evidence when testing or reanalyzing a migration.
 - Use unittest and synthetic evidence for tooling tests, registered with CTest.
-  These may run in correctness CI; measurements and native benchmark smokes may not.
+  These may run in correctness CI; measurements belong only to the dedicated
+  Windows benchmark workflow, and native benchmark smokes remain local opt-ins.
 
 ## Module boundaries
 
@@ -207,6 +225,8 @@
 - Prefer named intermediate results and predicates to deeply nested calls, long
   ternaries, or dense compound conditions. Use auto when the initializer makes the
   type clear; keep explicit types where storage width or an external API matters.
+- Store literal iteration data in a descriptively named collection before a
+  range-for loop. Do not embed initializer lists in the loop header.
 - Preserve short-circuit evaluation when extracting conditions. Guard pointer
   dereferences, keep conditional side effects conditional, and capture OS errors
   before another call can replace them. Readability changes must not alter ordering.

@@ -261,7 +261,7 @@ TEST_CASE("Socket immediate failures and ConnectEx refusal propagate")
   REQUIRE(ctx);
 
   auto invalid = [&]() -> Task<void> {
-    (void)co_await weave::tcp::connect(*ctx, "not-an-ip", 80);
+    (void)co_await weave::tcp::connect(*ctx, "bad host", 80);
     FAIL("Resumed after invalid address");
   };
   CHECK_FALSE(ctx->run(invalid()));

@@ -34,10 +34,10 @@ static weave::Task<void> weave_session(weave::TcpStream client, Workload config)
   }
 }
 
-static weave::Task<void> weave_server(Workload config)
+static weave::Task<void> weave_server(Workload config, unsigned workers)
 {
   auto listener = co_await weave::tcp::listen("127.0.0.1", 0, 8192);
-  std::printf("{\"port\":%u,\"workers\":4}\n", static_cast<unsigned>(listener.local_port()));
+  std::printf("{\"port\":%u,\"workers\":%u}\n", static_cast<unsigned>(listener.local_port()), workers);
   std::fflush(stdout);
   for (;;) {
     auto client = co_await listener.accept({.no_delay = true});
@@ -80,11 +80,15 @@ int main(int argc, char **argv)
 {
   Workload config;
   unsigned uneven = 0;
+  unsigned workers = 4;
   std::uintptr_t mask = 0;
-  if (argc != 6 || !bench::stress::number(argv[2], config.bytes) || !bench::stress::number(argv[3], config.work) ||
-    !bench::stress::number(argv[4], uneven) || !bench::stress::number(argv[5], mask) || uneven > 1 ||
-    !bench::stress::valid(config)) {
-    std::fputs("Usage: weave_runtime_server weave|weave-shared|asio bytes cpu uneven affinity-mask\n", stderr);
+  if ((argc != 6 && argc != 7) || !bench::stress::number(argv[2], config.bytes) ||
+    !bench::stress::number(argv[3], config.work) || !bench::stress::number(argv[4], uneven) ||
+    !bench::stress::number(argv[5], mask) || uneven > 1 || !bench::stress::valid(config) ||
+    (argc == 7 && !bench::stress::number(argv[6], workers)) || !workers || workers > 32) {
+    std::fputs(
+      "Usage: weave_runtime_server weave|weave-shared|asio bytes cpu uneven affinity-mask [workers]\n",
+      stderr);
     return 1;
   }
   config.uneven = uneven != 0;
@@ -94,29 +98,29 @@ int main(int argc, char **argv)
   if (backend == "weave" || backend == "weave-shared") {
     const auto layout = backend == "weave" ? weave::IoLayout::sharded : weave::IoLayout::shared;
     auto runtime = weave::Runtime::create(
-      {.workers = 4, .scheduler = weave::Scheduler::work_stealing, .io_layout = layout});
+      {.workers = workers, .scheduler = weave::Scheduler::work_stealing, .io_layout = layout});
     if (!runtime)
       return weave::report_error(runtime.error());
-    auto result = runtime->run(weave_server(config));
+    auto result = runtime->run(weave_server(config, workers));
     return result ? 0 : weave::report_error(result.error());
   }
   if (backend != "asio")
     return 1;
-  bench::AsioPool pool(4, false);
+  bench::AsioPool pool(workers, false);
   tcp::acceptor listener(pool.context(0));
   asio::error_code error;
   listener.open(tcp::v4(), error);
   if (!error)
     listener.bind(tcp::endpoint(asio::ip::address_v4::loopback(), 0), error);
   if (!error)
-    listener.listen(8192, error);
+    listener.listen(SOMAXCONN_HINT(8192), error);
   if (error)
     return 1;
   const auto endpoint = listener.local_endpoint(error);
   if (error)
     return 1;
   asio::co_spawn(pool.context(0), asio_server(listener, config), asio::detached);
-  std::printf("{\"port\":%u,\"workers\":4}\n", static_cast<unsigned>(endpoint.port()));
+  std::printf("{\"port\":%u,\"workers\":%u}\n", static_cast<unsigned>(endpoint.port()), workers);
   std::fflush(stdout);
   // The external supervisor ends each server after sampling its process counters.
   for (;;)

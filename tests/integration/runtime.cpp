@@ -651,7 +651,7 @@ TEST_CASE_TEMPLATE(
       {.workers = 4, .scheduler = mode, .context = {.skip_successful_completions = skip}});
     REQUIRE(runtime);
     auto job = runtime->spawn([&](weave::Context &ctx) -> weave::Task<bool> {
-      auto invalid = co_await weave::as_result(weave::tcp::connect(ctx, "not-an-address", 0));
+      auto invalid = co_await weave::as_result(weave::tcp::connect(ctx, "bad host", 0));
       if (invalid || invalid.error() != std::errc::invalid_argument)
         co_return false;
       auto stream = co_await weave::as_result(weave::tcp::connect(ctx, "127.0.0.1", peer.port()));

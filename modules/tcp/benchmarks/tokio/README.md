@@ -1,6 +1,8 @@
 # Four-worker runtime stress comparison
 
-This is a manually invoked Windows TCP server comparison, not a CI benchmark.
+This is the heavier, manually invoked four-worker Windows TCP server comparison.
+The same servers and load generator also support the smaller, separate
+[automatic CI profile](../../../../docs/ci-benchmarks.md).
 Weave, Tokio and the pinned Asio control have four I/O workers. An identical
 separate Asio client process uses eight workers. Four server cores and eight
 client cores are selected from different physical cores; no SMT core is shared.
@@ -16,8 +18,12 @@ are different. No library implementation is modified or special-cased.
 
 The protocol reads a complete fixed-size request, optionally performs integer
 work, and writes the complete response. Every connection has one outstanding
-request and a reusable buffer. TCP_NODELAY is enabled on both ends, backlog is
-8192, and every returned byte is validated. CPU work uses identical wrapping
+request and a reusable buffer. TCP_NODELAY is enabled on both ends, the requested
+backlog is 8192, and every returned byte is validated. On Windows all three servers
+now encode that request as `SOMAXCONN_HINT(8192)`, rather than passing a plain
+positive value that the OS can silently cap. Earlier archived measurements used
+the plain value; their actual queue capacity was not 8192 on this host. See the
+[backlog investigation](../../../../docs/tcp-backlog.md). CPU work uses identical wrapping
 64-bit arithmetic and returns its result in the first eight bytes, so the work
 cannot be optimized away. It is not an HTTP or raw chunked-echo benchmark.
 
@@ -38,8 +44,14 @@ with a five-minute default deadline. Timeouts fail rather than report partial
 evidence as a complete result. The supervisor also has per-process phase deadlines.
 
 Failures produce a per-window `.failure.json` with the phase, process IDs, exit
-codes observed before cleanup, and stderr tails. The client reports the first
-failing connection, operation, error code/category, and transferred/expected byte
+codes observed before cleanup, and stderr tails. Failure phases distinguish
+socket cleanup and process exit. `STOP` is followed by a `CLOSED` acknowledgment
+after all sockets close (25-second bound), then a
+five-second process-exit wait. The outer job still has a five-minute default
+deadline; cleanup is outside the measurement window.
+
+The client reports the first failing connection, operation, error code/category,
+and transferred/expected byte
 counts. Setup timeouts include atomic stage counts and bounded per-connection
 warmup snapshots; these are diagnostic snapshots, not a synchronized view of
 all connections. Progress instrumentation runs during setup, not each measured

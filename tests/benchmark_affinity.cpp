@@ -33,3 +33,31 @@ TEST_CASE("benchmark rejects insufficient or overlapping physical core masks")
   cores[1] = 0;
   CHECK(experiment::partition_cpus(cores, 0xFFF).peer == 0);
 }
+
+TEST_CASE("CI benchmarks adapt to runner cores without sharing SMT siblings")
+{
+  const std::array<DWORD_PTR, 4> cores{3, 12, 48, 192};
+  const auto dual = experiment::partition_ci_cpus(cores, 255);
+  CHECK(std::popcount(dual.peer) == 2);
+  CHECK(std::popcount(dual.client) == 2);
+  for (const auto core : cores) {
+    CHECK(std::popcount(core & (dual.client | dual.peer)) == 1);
+    const bool shared = (core & dual.client) && (core & dual.peer);
+    CHECK_FALSE(shared);
+  }
+
+  const auto single = experiment::partition_ci_cpus(std::span(cores).first(2), 255);
+  CHECK(std::popcount(single.peer) == 1);
+  CHECK(std::popcount(single.client) == 1);
+  const auto restricted = experiment::partition_ci_cpus(cores, 0xAA);
+  CHECK(std::popcount(restricted.peer) == 2);
+  CHECK(std::popcount(restricted.client) == 2);
+  CHECK(((restricted.client | restricted.peer) & ~DWORD_PTR{0xAA}) == 0);
+  CHECK(experiment::partition_ci_cpus(std::span(cores).first(1), 255).peer == 0);
+  CHECK(experiment::partition_ci_cpus(cores, 3).client == 0);
+
+  const std::array<DWORD_PTR, 2> overlapping{3, 6};
+  const std::array<DWORD_PTR, 2> invalid{0, 12};
+  CHECK(experiment::partition_ci_cpus(overlapping, 255).peer == 0);
+  CHECK(experiment::partition_ci_cpus(invalid, 255).client == 0);
+}

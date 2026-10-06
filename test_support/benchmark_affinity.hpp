@@ -35,7 +35,30 @@ inline CpuPartition partition_cpus(std::span<const DWORD_PTR> physical_cores, DW
   return {};
 }
 
-inline CpuPartition isolated_cpus()
+inline CpuPartition partition_ci_cpus(std::span<const DWORD_PTR> physical_cores, DWORD_PTR allowed)
+{
+  std::vector<DWORD_PTR> selected;
+  DWORD_PTR seen = 0;
+  for (const auto core : physical_cores) {
+    if (!core || (seen & core))
+      return {};
+    seen |= core;
+    if (const auto available = core & allowed)
+      selected.push_back(DWORD_PTR{1} << std::countr_zero(available));
+  }
+  if (selected.size() < 2)
+    return {};
+
+  const auto workers = std::min<std::size_t>(2, selected.size() / 2);
+  CpuPartition result;
+  for (std::size_t i = 0; i < workers; ++i) {
+    result.peer |= selected[i * 2];
+    result.client |= selected[i * 2 + 1];
+  }
+  return result;
+}
+
+inline CpuPartition isolated_cpus(bool ci = false)
 {
   if (GetActiveProcessorGroupCount() != 1)
     return {};
@@ -54,7 +77,7 @@ inline CpuPartition isolated_cpus()
       cores.push_back(entry.ProcessorMask);
   }
   std::sort(cores.begin(), cores.end());
-  return partition_cpus(cores, allowed);
+  return ci ? partition_ci_cpus(cores, allowed) : partition_cpus(cores, allowed);
 }
 
 } // namespace experiment

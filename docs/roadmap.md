@@ -17,6 +17,13 @@ original logs are insufficient to identify the cause. Passing later runs or new
 regression tests does not establish a fix. Use the new diagnostics to narrow a
 recurrence, then add a targeted reproducer before changing runtime behavior.
 
+The follow-up investigation confirmed and fixed a separate Windows backlog bug:
+plain `listen(..., 8192)` admitted only 200 queued connections on this host.
+Explicit larger backlogs now use `SOMAXCONN_HINT`, and the Asio/Tokio comparison
+servers request the same native hint. A no-accept regression fails with the old
+implementation and passes with the fix. See [the investigation](tcp-backlog.md).
+This is not proof that either historical timeout had the same cause.
+
 The new 1024-client test also timed out once in shared-IOCP, queued-success mode
 with 948 clients warmed while Debug, Release and sanitizer suites were running
 concurrently on the same host. The sanitizer integration suite subsequently
@@ -28,13 +35,35 @@ Further hardening should cover admission/shutdown races, cancellation and
 completion races, connection resets, partial I/O, and buffer/frame destruction.
 Do not change scheduling defaults based on a single benchmark host.
 
+The reproducible extreme-pressure cleanup failure was traced to the common
+external load generator's bulk socket closes, not a stalled Weave coroutine.
+Socket closure now has an explicit `CLOSED` acknowledgment and a bounded
+25-second phase, followed by the original five-second process-exit limit. The
+total manual job deadline remains five minutes. See the backlog investigation
+for the failing/progress evidence and the complete post-fix cleanup runs.
+
 ## 2. DNS and IPv6
 
-Introduce a useful address/endpoint representation and IPv6-capable transports,
-then asynchronous hostname resolution and multi-endpoint connection handling.
-Numeric-address operations must remain available without performing DNS. Resolver
-buffers and cancellation must drain before their owning tasks can finish. Keep
-the common connect/listen path simple and do not expose Windows types publicly.
+Implemented on Windows: owned IP addresses/endpoints, IPv6-only and explicit
+dual-stack listeners, asynchronous hostname resolution, and sequential
+multi-endpoint connection fallback. Numeric operations bypass DNS. Resolver
+cancellation drains native completion before releasing query storage, and
+public headers contain no Windows types. See [addresses and DNS](addresses.md).
+Happy Eyeballs racing and a Weave-owned DNS cache remain outside this first pass.
+
+Validation: Debug and Release passed 16/16 correctness checks, including isolated
+component builds, relocated consumers, and standalone installed headers. The
+final sanitizer run passed 15/15 with packaging excluded. DNS tests use localhost
+or a per-query injected native provider, not external DNS. The multicore test
+opens 512 IPv6/DNS clients across four roots for every scheduler/layout/completion
+combination. Temporary probes were deleted; performance comparisons were not rerun.
+
+Overlapping local build/test runs also produced two echo-example timeouts with
+previously empty diagnostics and one five-second backlog-test timeout. Isolated
+and final suite reruns passed without increasing those limits. Failure evidence
+is retained under ignored `benchmarks/results/network-validation-20261006-152458/`;
+echo failures now include process metadata and Python tracebacks. These observations
+are not proof that host-pressure timeouts or the historical warmup failure are fixed.
 
 ## 3. Channels and semaphores
 

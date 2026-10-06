@@ -39,6 +39,7 @@ struct Control {
   HANDLE ready_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   HANDLE done_event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
   Clock::time_point deadline;
+  std::chrono::milliseconds warmup{0};
   std::size_t count;
   std::uint16_t port;
 
@@ -171,6 +172,15 @@ static asio::awaitable<void> session(Connection &connection, Control &control)
     }
     connection.warmed.store(i + 1, std::memory_order_relaxed);
   }
+  if (control.warmup.count()) {
+    const auto until = Clock::now() + control.warmup;
+    while (Clock::now() < until) {
+      if (!co_await exchange(connection, control, false)) {
+        connection.ok = false;
+        co_return;
+      }
+    }
+  }
   connection.stage.store(Connection::Stage::waiting, std::memory_order_relaxed);
   if (control.ready.fetch_add(1, std::memory_order_acq_rel) + 1 == control.count)
     SetEvent(control.ready_event);
@@ -226,8 +236,8 @@ static void report_progress(
 
 int main(int argc, char **argv)
 {
-  if (argc == 2 && std::string_view{argv[1]} == "--cpu-masks") {
-    const auto masks = experiment::isolated_cpus();
+  if (argc == 2 && (std::string_view{argv[1]} == "--cpu-masks" || std::string_view{argv[1]} == "--ci-cpu-masks")) {
+    const auto masks = experiment::isolated_cpus(std::string_view{argv[1]} == "--ci-cpu-masks");
     if (!masks.client || !masks.peer)
       return 1;
     std::printf(
@@ -240,23 +250,24 @@ int main(int argc, char **argv)
   std::uint16_t port = 0;
   std::size_t count = 0, workers = 0;
   unsigned uneven = 0;
-  int duration_ms = 0;
+  int duration_ms = 0, warmup_ms = 0;
   std::uintptr_t mask = 0;
-  if (argc != 9 || !bench::stress::number(argv[1], port) || !bench::stress::number(argv[2], count) ||
+  if ((argc != 9 && argc != 10) || !bench::stress::number(argv[1], port) || !bench::stress::number(argv[2], count) ||
     !bench::stress::number(argv[3], config.bytes) || !bench::stress::number(argv[4], config.work) ||
     !bench::stress::number(argv[5], uneven) || !bench::stress::number(argv[6], duration_ms) ||
     !bench::stress::number(argv[7], mask) || !bench::stress::number(argv[8], workers) || !port || count == 0 ||
     count > 8192 || workers == 0 || workers > 32 || uneven > 1 || duration_ms < 50 || duration_ms > 10000 ||
-    !bench::stress::valid(config)) {
+    !bench::stress::valid(config) || (argc == 10 && !bench::stress::number(argv[9], warmup_ms)) || warmup_ms < 0 ||
+    warmup_ms > 5000) {
     std::fputs(
-      "Usage: weave_runtime_load port connections bytes cpu uneven duration-ms affinity-mask workers\n",
+      "Usage: weave_runtime_load port connections bytes cpu uneven duration-ms affinity-mask workers [warmup-ms]\n",
       stderr);
     return 1;
   }
   config.uneven = uneven != 0;
   if (mask && !SetProcessAffinityMask(GetCurrentProcess(), mask))
     return 1;
-  Control control{.count = count, .port = port};
+  Control control{.warmup = std::chrono::milliseconds(warmup_ms), .count = count, .port = port};
   if (!control.ready_event || !control.done_event)
     return 1;
   bench::AsioPool pool(workers, true);
@@ -346,8 +357,26 @@ int main(int argc, char **argv)
   // Keep sockets open so the server actively closes first, avoiding client TIME_WAIT buildup.
   if (!std::getline(std::cin, command) || command != "STOP")
     ExitProcess(2);
+  const auto cleanup_start = Clock::now();
+  std::fprintf(stderr, "Cleanup: closing %zu sockets\n", connections.size());
+  std::fflush(stderr);
+  std::size_t closed = 0;
   for (auto &connection : connections) {
-    asio::error_code ignored;
-    connection->socket.close(ignored);
+    asio::error_code error;
+    connection->socket.close(error);
+    if (error) {
+      control.fail(connection->id, "close", error, 0, 0);
+      ExitProcess(2);
+    }
+    if (++closed % 512 == 0) {
+      std::fprintf(
+        stderr,
+        "Cleanup: closed %zu sockets, %.3f seconds\n",
+        closed,
+        std::chrono::duration<double>(Clock::now() - cleanup_start).count());
+      std::fflush(stderr);
+    }
   }
+  std::puts("CLOSED");
+  std::fflush(stdout);
 }

@@ -26,6 +26,20 @@
       }
     },
     {
+      "name": "windows-bench-ci",
+      "displayName": "Windows short Weave/Asio/Tokio comparison",
+      "inherits": "windows",
+      "binaryDir": "${sourceDir}/build/windows-bench-ci",
+      "cacheVariables": {
+        "WEAVE_BUILD_TESTS": "OFF",
+        "WEAVE_BUILD_EXAMPLES": "OFF",
+        "WEAVE_BUILD_BENCHMARKS": "ON",
+        "WEAVE_BENCHMARK_SUITE": "ci",
+        "WEAVE_ENABLE_ASAN": "OFF",
+        "WEAVE_PROFILE_RUNTIME": "OFF"
+      }
+    },
+    {
       "name": "asan",
       "inherits": "windows",
       "binaryDir": "${sourceDir}/build/asan",
@@ -40,6 +54,7 @@
     {"name": "release", "configurePreset": "windows", "configuration": "Release"},
     {"name": "ci-debug", "configurePreset": "windows-ci", "configuration": "Debug"},
     {"name": "ci-release", "configurePreset": "windows-ci", "configuration": "Release"},
+    {"name": "bench-ci", "configurePreset": "windows-bench-ci", "configuration": "Release"},
     {"name": "asan", "configurePreset": "asan", "configuration": "Release"}
   ],
   "testPresets": [

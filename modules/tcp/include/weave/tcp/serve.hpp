@@ -7,6 +7,7 @@ namespace weave {
 struct ServeOptions {
   int backlog = 512;
   bool no_delay = false;
+  bool ipv6_only = true;
 };
 
 namespace tcp {
@@ -20,12 +21,24 @@ Task<void> serve(TcpListener &listener, AcceptOptions options, F handler, H on_e
   return weave::scope(detail::TcpServeBody<F, H>{listener, options, std::move(handler), std::move(on_error)});
 }
 
-// Lazy setup on the executing Context. ipv4 must remain alive until setup finishes.
 template <detail::TcpServeHandler F, detail::ErrorObserver H = detail::IgnoreError>
-Task<void> serve(const char *ipv4, u16 port, ServeOptions options, F handler, H on_error = {})
+Task<void> serve(Endpoint endpoint, ServeOptions options, F handler, H on_error = {})
 {
-  auto listener = co_await listen(ipv4, port, options.backlog);
+  auto listener = co_await listen(endpoint, {.backlog = options.backlog, .ipv6_only = options.ipv6_only});
   co_await serve(listener, {.no_delay = options.no_delay}, std::move(handler), std::move(on_error));
+}
+
+// Lazy setup on the executing Context. address must remain alive until setup finishes.
+template <detail::TcpServeHandler F, detail::ErrorObserver H = detail::IgnoreError>
+Task<void> serve(const char *address, u16 port, ServeOptions options, F handler, H on_error = {})
+{
+  detail::require(detail::current_context != nullptr);
+  if (!address)
+    co_await fail(std::errc::invalid_argument);
+  auto endpoint = Endpoint::parse(address, port);
+  if (!endpoint)
+    co_await fail(endpoint.error());
+  co_await serve(*endpoint, options, std::move(handler), std::move(on_error));
 }
 
 } // namespace tcp
