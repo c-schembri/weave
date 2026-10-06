@@ -134,21 +134,20 @@ Installed packages support `find_package(weave CONFIG REQUIRED COMPONENTS tcp)`.
 ## Latest Windows Benchmarks
 
 <!-- benchmark-results:start -->
-Initial **local validation**, not hosted CI: Windows 11, Ryzen 9 9900X,
-2026-10-06. Two server + two client workers on separate cores; seven one-second
-windows per case. The complete run took **115 seconds**, including warmup/cleanup.
-Median round trips/second; higher is better.
+Latest complete run: [`855f392`](https://github.com/c-schembri/weave/commit/855f392a781dbf42a7c41e8598874ed66d2baa86), 2026-10-06 05:43 +0000; [full results and raw evidence](https://github.com/c-schembri/weave/actions/runs/37419857460).
+
+Windows x64; 1 server + 1 client workers on separate cores. 7 x 1s per library/workload. Median round trips/second; higher is better.
 
 | Workload | Weave | Asio | Tokio | Max throughput CV | Notes |
 | --- | ---: | ---: | ---: | ---: | --- |
-| 64 clients / 1 KiB | 242,605 | 237,135 | 176,445 | 1.5% | Within thresholds |
-| 1,024 clients / 1 KiB | 172,211 | 173,322 | 132,675 | 6.0% | Client busy |
-| 64 clients / 64 KiB | 90,636 | 90,562 | 92,619 | 5.6% | Client busy |
-| 256 clients / uneven CPU | 178,632 | 176,469 | 132,060 | 6.0% | Within thresholds |
+| 64 clients / 1 KiB | 115,254 | 122,117 | 112,684 | 3.7% | within thresholds; client busy |
+| 1,024 clients / 1 KiB | 115,676 | 115,905 | 95,290 | 3.3% | within thresholds; client busy |
+| 64 clients / 64 KiB | 38,606 | 37,220 | 51,671 | 5.9% | noisy; client busy |
+| 256 clients / uneven CPU | 79,045 | 74,890 | 64,412 | 3.1% | noisy |
 
-Precision checks passed. Client-busy cases may be load-generator limited, not
-maximum server capacity. This measures the current uncommitted working tree;
-the first complete main-branch CI run replaces this table with revision-linked results.
+**Noisy: comparisons are inconclusive.**
+
+CPU use, p99/p99.9 latency, paired confidence intervals, and limitations: [benchmark protocol](docs/ci-benchmarks.md).
 <!-- benchmark-results:end -->
 
 [CI protocol and limitations](docs/ci-benchmarks.md) /
