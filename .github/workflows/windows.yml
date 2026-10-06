@@ -18,23 +18,23 @@ jobs:
   test:
     name: MSVC / ${{ matrix.configuration }}
     runs-on: windows-2022
-    timeout-minutes: 15
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         include:
           - configuration: Debug
-            configure: windows-ci
-            preset: ci-debug
-            directory: build/windows-ci
+            configure: windows-tls
+            preset: tls-debug
+            directory: build/windows-tls
           - configuration: Release
-            configure: windows-ci
-            preset: ci-release
-            directory: build/windows-ci
+            configure: windows-tls
+            preset: tls-release
+            directory: build/windows-tls
           - configuration: AddressSanitizer
-            configure: asan
-            preset: asan
-            directory: build/asan
+            configure: asan-tls
+            preset: asan-tls
+            directory: build/asan-tls
     defaults:
       run:
         shell: cmd
@@ -49,8 +49,32 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Check out pinned vcpkg
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: microsoft/vcpkg
+          ref: 83375d1ded4878305df9f5272f360f4f80ee0d83
+          path: build/vcpkg
+          persist-credentials: false
+
+      - name: Cache OpenSSL binaries
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: build/vcpkg/binary-cache
+          key: openssl-windows-2022-x64-83375d1ded4878305df9f5272f360f4f80ee0d83-v1
+
+      - name: Bootstrap vcpkg
+        run: call build\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+
+      - name: Install optional TLS dependency
+        env:
+          VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\build\vcpkg\binary-cache,readwrite
+        run: |
+          python -c "from pathlib import Path; Path('build/vcpkg/binary-cache').mkdir(parents=True, exist_ok=True)"
+          build\vcpkg\vcpkg.exe install openssl:x64-windows --disable-metrics
+
       - name: Configure without benchmarks
-        run: cmake --preset ${{ matrix.configure }} -DWEAVE_BUILD_BENCHMARKS=OFF
+        run: cmake --preset ${{ matrix.configure }} -DWEAVE_BUILD_BENCHMARKS=OFF -DOPENSSL_ROOT_DIR="%GITHUB_WORKSPACE%/build/vcpkg/installed/x64-windows"
 
       - name: Build tests and examples
         run: cmake --build --preset ${{ matrix.preset }} --parallel 4

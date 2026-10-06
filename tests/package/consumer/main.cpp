@@ -1,4 +1,9 @@
-#if defined(WEAVE_USE_TCP)
+#if defined(WEAVE_USE_TLS)
+#include <weave/tls.hpp>
+#elif defined(WEAVE_USE_SYNC)
+#include <weave/sync.hpp>
+#include <weave/io.hpp>
+#elif defined(WEAVE_USE_TCP)
 #include <weave/tcp.hpp>
 #elif defined(WEAVE_USE_RUNTIME)
 #include <weave/runtime.hpp>
@@ -76,7 +81,31 @@ int main()
   if (weave::parse_port("8080") != 8080)
     return 5;
 
-#if defined(WEAVE_USE_TCP)
+#if defined(WEAVE_USE_TLS)
+  auto tls = weave::TlsContext::client();
+  if (!tls)
+    return 1;
+
+  // Instantiate the transport adapter without making an external connection.
+  auto pending = weave::tls::connect(*tls, "localhost", 443);
+  return 0;
+#elif defined(WEAVE_USE_SYNC)
+  auto ctx = weave::Context::create();
+  if (!ctx)
+    return 1;
+
+  weave::Semaphore semaphore(1);
+  if (!ctx->run(semaphore.acquire()))
+    return 2;
+
+  weave::Channel<int> channel(1);
+  if (!ctx->run(channel.send(42)))
+    return 3;
+
+  channel.close();
+  auto value = ctx->run(channel.receive());
+  return value && *value && **value == 42 ? 0 : 4;
+#elif defined(WEAVE_USE_TCP)
   auto context = weave::Context::create();
   if (!context)
     return 1;
@@ -110,7 +139,11 @@ int main()
     auto inherited = runtime->run(scoped_detach_values());
     if (!inherited)
       return 2;
-    runtime->detach([](weave::Context &ctx) -> weave::Task<void> { co_await ctx.yield(); }, detach_error);
+    runtime->detach(
+      [](weave::Context &ctx) -> weave::Task<void> {
+        co_await ctx.yield();
+      },
+      detach_error);
     runtime->detach(value(), detach_error);
     runtime->detach(value, detach_error);
     runtime->detach_on(0, value(), detach_error);
@@ -143,7 +176,11 @@ int main()
   auto inherited = context->run(scoped_detach_values());
   if (!inherited)
     return 2;
-  context->detach([](weave::Context &ctx) -> weave::Task<void> { co_await ctx.yield(); }, detach_error);
+  context->detach(
+    [](weave::Context &ctx) -> weave::Task<void> {
+      co_await ctx.yield();
+    },
+    detach_error);
   context->detach(value(), detach_error);
   context->detach(value, detach_error);
   auto direct = context->spawn(value());
@@ -160,7 +197,9 @@ int main()
   return context->run(std::move(*task).as_task()) == 42 ? 0 : 3;
 #else
   int observed = 0;
-  auto task = value().on_error([&](weave::Error) noexcept { ++observed; });
+  auto task = value().on_error([&](weave::Error) noexcept {
+    ++observed;
+  });
   weave::detail::TaskAccess::start(task);
   if (!weave::detail::TaskAccess::done(task))
     return 1;

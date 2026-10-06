@@ -4,7 +4,8 @@ Windows x64: Visual Studio 2022 with the C++ workload, CMake 3.25+, and Git.
 Core is portable C++23; IO, TCP, and Runtime currently require Windows. Public
 targets supply their C++23 requirement. Python 3.11+ is needed only for tests
 and developer automation, without pip packages. Rust is needed only for the
-optional Tokio comparison. Library-only builds download no external dependencies.
+optional Tokio comparison. Library-only builds download no external dependencies;
+selecting TLS requires a separately installed OpenSSL 3 package.
 
 ## Vendored
 
@@ -15,8 +16,9 @@ target_link_libraries(my_app PRIVATE weave::tcp)
 ```
 
 Select `"tcp;runtime"` and link `weave::runtime` too when using worker threads.
-Required components are selected automatically: TCP and Runtime depend on IO,
-IO depends on core. TCP and Runtime do not depend on each other.
+Required components are selected automatically: TCP, Sync and Runtime depend on
+IO; TLS depends on TCP and Sync; IO depends on Core. TCP and Runtime do not depend
+on each other. Only selecting TLS discovers OpenSSL. [TLS build options](tls.md).
 
 ## Installed
 
@@ -43,6 +45,8 @@ no native Windows header dependency.
 | --- | --- | --- |
 | `windows-ci` | `ci-debug`, `ci-release` | Correctness tests and examples; no benchmarks |
 | `asan` | `asan` | Release AddressSanitizer tests/examples; no benchmarks |
+| `windows-tls` | `tls-debug`, `tls-release` | All correctness tests/examples including TLS; requires OpenSSL 3 |
+| `asan-tls` | `asan-tls` | All correctness tests/examples including TLS under AddressSanitizer |
 | `windows-runtime-bench` | `runtime-bench` (build only) | Only native Weave/Asio runtime servers and common client |
 | `windows` | `debug`, `release` | Full tests, examples, comparisons and benchmark smokes |
 

@@ -15,6 +15,7 @@ AllowAllArgumentsOnNextLine: false
 AllowAllParametersOfDeclarationOnNextLine: false
 AlignEscapedNewlines: Left
 AllowShortFunctionsOnASingleLine: None
+AllowShortLambdasOnASingleLine: None
 SeparateDefinitionBlocks: Always
 WrapNamespaceBodyWithEmptyLines: Always
 Cpp11BracedListStyle: true

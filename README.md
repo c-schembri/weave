@@ -41,7 +41,8 @@ automatically; synchronous setup and `run()` return `Result<T>` (`std::expected`
 each client's receive buffer and waits for its callback before reading again.
 
 Windows x64, Visual Studio 2022 C++ workload, CMake 3.25+, Git, and Python 3.11+
-for tests. No Python or third-party dependencies for library-only builds.
+for tests. No Python or third-party dependencies for library-only builds unless
+the optional TLS component is selected.
 
 ```sh
 git clone https://github.com/c-schembri/weave.git
@@ -113,6 +114,15 @@ Cancellation is cooperative: cancel, then await/join before releasing borrowed
 resources. Keep contexts, streams, buffers and arguments alive through completion.
 [Tasks and lifetimes](docs/tasks.md) / [Cancellation, scopes and timers](docs/cancellation.md).
 
+**Synchronization.** Bounded `Channel<T>` provides async send/receive with
+backpressure; `Semaphore` limits concurrent work with RAII permits. Both support
+cancellation and cross-context wakeups. [Guide and example](docs/synchronization.md).
+
+**Streams and TLS.** Small stream concepts let helpers work over TCP, TLS, and
+custom transports. Optional OpenSSL-backed TLS has verified client/server
+handshakes and the same read/write API. [Stream helpers](docs/streams.md) /
+[TLS setup, example, and limitations](docs/tls.md).
+
 ## Use In Your Project
 
 Include and link only the components you need. TCP does not depend on Runtime.
@@ -123,6 +133,9 @@ Include and link only the components you need. TCP does not depend on Runtime.
 | Context, submission, timers | `<weave/io.hpp>` | `weave::io` |
 | Multicore runtime | `<weave/runtime.hpp>` | `weave::runtime` |
 | TCP streams and servers | `<weave/tcp.hpp>` | `weave::tcp` |
+| Channels and semaphores | `<weave/sync.hpp>` | `weave::sync` |
+| Stream concepts and helpers | `<weave/stream.hpp>` | `weave::core` |
+| Verified TLS streams (OpenSSL 3) | `<weave/tls.hpp>` | `weave::tls` |
 
 ```cmake
 set(WEAVE_MODULES "tcp;runtime" CACHE STRING "" FORCE)

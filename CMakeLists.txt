@@ -6,7 +6,7 @@ if(MSVC)
   set(CMAKE_VS_GLOBALS "VcpkgEnabled=false;VcpkgApplocalDeps=false")
 endif()
 
-set(WEAVE_MODULES "core;io;runtime;tcp" CACHE STRING "Components to build (dependencies are included automatically)")
+set(WEAVE_MODULES "core;io;runtime;tcp;sync" CACHE STRING "Components to build (dependencies are included automatically)")
 option(WEAVE_BUILD_TESTS "Build correctness tests" OFF)
 option(WEAVE_BUILD_BENCHMARKS "Build networking comparison benchmarks" OFF)
 set(WEAVE_BENCHMARK_SUITE "full" CACHE STRING "Benchmark suite: full or runtime (Weave/Asio TCP only)")
@@ -26,12 +26,15 @@ include(cmake/WeaveModule.cmake)
 
 set(WEAVE_ENABLED_MODULES core)
 foreach(module IN LISTS WEAVE_MODULES)
-  if(NOT module MATCHES "^(core|io|runtime|tcp)$")
+  if(NOT module MATCHES "^(core|io|runtime|tcp|sync|tls)$")
     message(FATAL_ERROR "Unknown Weave component: ${module}")
   endif()
   list(APPEND WEAVE_ENABLED_MODULES "${module}")
-  if(module STREQUAL "runtime" OR module STREQUAL "tcp")
+  if(module MATCHES "^(runtime|tcp|sync|tls)$")
     list(APPEND WEAVE_ENABLED_MODULES io)
+  endif()
+  if(module STREQUAL "tls")
+    list(APPEND WEAVE_ENABLED_MODULES tcp sync)
   endif()
 endforeach()
 list(REMOVE_DUPLICATES WEAVE_ENABLED_MODULES)
@@ -57,7 +60,7 @@ if(WEAVE_BUILD_TESTS)
 endif()
 
 # Keep dependency order explicit; each module owns its sources, headers and tests.
-foreach(module IN ITEMS core io runtime tcp)
+foreach(module IN ITEMS core io runtime tcp sync tls)
   if(module IN_LIST WEAVE_ENABLED_MODULES)
     add_subdirectory(modules/${module})
   endif()
@@ -123,6 +126,10 @@ if(WEAVE_BUILD_TESTS)
       "-DWEAVE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
       "-DWEAVE_TEST_MODULES=${component}"
       "-DWEAVE_ASAN=${WEAVE_ENABLE_ASAN}"
+      "-DWEAVE_PACKAGE_TLS=$<TARGET_EXISTS:weave_tls>"
+      "-DOPENSSL_ROOT_DIR=${OPENSSL_ROOT_DIR}"
+      "-DOPENSSL_USE_STATIC_LIBS=${OPENSSL_USE_STATIC_LIBS}"
+      "-DWEAVE_TLS_RUNTIME_DIR=${WEAVE_TLS_RUNTIME_DIR}"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/package/components.cmake")
     set_tests_properties(package_components_${component} PROPERTIES TIMEOUT 180 LABELS packaging)
   endforeach()

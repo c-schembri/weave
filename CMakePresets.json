@@ -8,7 +8,7 @@
       "architecture": "x64",
       "binaryDir": "${sourceDir}/build/windows",
       "cacheVariables": {
-        "WEAVE_MODULES": "core;io;runtime;tcp",
+        "WEAVE_MODULES": "core;io;runtime;tcp;sync",
         "WEAVE_BUILD_TESTS": "ON",
         "WEAVE_BUILD_BENCHMARKS": "ON",
         "WEAVE_BUILD_EXAMPLES": "ON"
@@ -23,6 +23,23 @@
         "WEAVE_BUILD_TESTS": "ON",
         "WEAVE_BUILD_BENCHMARKS": "OFF",
         "WEAVE_BUILD_EXAMPLES": "ON"
+      }
+    },
+    {
+      "name": "windows-tls",
+      "displayName": "Windows correctness tests including optional TLS",
+      "inherits": "windows-ci",
+      "binaryDir": "${sourceDir}/build/windows-tls",
+      "cacheVariables": {
+        "WEAVE_MODULES": "core;io;runtime;tcp;sync;tls"
+      }
+    },
+    {
+      "name": "asan-tls",
+      "inherits": "windows-tls",
+      "binaryDir": "${sourceDir}/build/asan-tls",
+      "cacheVariables": {
+        "WEAVE_ENABLE_ASAN": "ON"
       }
     },
     {
@@ -55,6 +72,9 @@
     {"name": "release", "configurePreset": "windows", "configuration": "Release"},
     {"name": "ci-debug", "configurePreset": "windows-ci", "configuration": "Debug"},
     {"name": "ci-release", "configurePreset": "windows-ci", "configuration": "Release"},
+    {"name": "tls-debug", "configurePreset": "windows-tls", "configuration": "Debug"},
+    {"name": "tls-release", "configurePreset": "windows-tls", "configuration": "Release"},
+    {"name": "asan-tls", "configurePreset": "asan-tls", "configuration": "Release"},
     {"name": "runtime-bench", "configurePreset": "windows-runtime-bench", "configuration": "Release"},
     {"name": "asan", "configurePreset": "asan", "configuration": "Release"}
   ],
@@ -63,6 +83,9 @@
     {"name": "release", "configurePreset": "windows", "configuration": "Release", "output": {"outputOnFailure": true}},
     {"name": "ci-debug", "configurePreset": "windows-ci", "configuration": "Debug", "output": {"outputOnFailure": true}, "filter": {"exclude": {"label": "benchmark"}}},
     {"name": "ci-release", "configurePreset": "windows-ci", "configuration": "Release", "output": {"outputOnFailure": true}, "filter": {"exclude": {"label": "benchmark"}}},
+    {"name": "tls-debug", "configurePreset": "windows-tls", "configuration": "Debug", "output": {"outputOnFailure": true}},
+    {"name": "tls-release", "configurePreset": "windows-tls", "configuration": "Release", "output": {"outputOnFailure": true}},
+    {"name": "asan-tls", "configurePreset": "asan-tls", "configuration": "Release", "output": {"outputOnFailure": true}},
     {"name": "asan", "configurePreset": "asan", "configuration": "Release", "output": {"outputOnFailure": true}}
   ]
 }

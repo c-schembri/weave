@@ -15,6 +15,8 @@ modules/
   io/         Context, completion engine, task ownership, spawn and JoinHandle
   runtime/    Worker threads, scheduling policies, cross-context coordination
   tcp/        Sockets, listeners, connect/accept, reads/writes, Winsock lifetime
+  sync/       Bounded channels, semaphore permits, cancellation-aware wait queues
+  tls/        Optional OpenSSL engine and generic encrypted-stream adapter
 tests/
   integration/   Contracts spanning runtime, TCP, and tasks
   package/       Isolated builds and installed consumer/header checks
@@ -58,12 +60,13 @@ There is no global library `include/`, `src/`, or catch-all `detail/` directory.
 returning, without depending on Runtime or adding another execution layer.
 
 ```text
-weave::core
-    ^
-weave::io
-    ^             ^
-weave::tcp    weave::runtime
-   (both depend on io, not on each other)
+core <- io <- {tcp, sync, runtime}
+                ^     ^
+                 \   /
+                  tls -> OpenSSL 3
+
+TCP, Sync and Runtime do not depend on each other.
+TLS does not require Runtime; Core's stream contracts have no OS dependency.
 ```
 
 `WEAVE_MODULES` selects build roots, with dependencies added automatically.
@@ -106,12 +109,24 @@ or public API is introduced by these visibility boundaries.
 
 ### Future protocols
 
-Add HTTP, WebSocket, PostgreSQL, TLS, and other modules as real features arrive,
+Add HTTP, WebSocket, PostgreSQL, and other modules as real features arrive,
 not as empty placeholder directories. Each gets its own include entry point and
 target with the smallest honest dependencies. Protocol code should depend on a
 transport contract rather than worker scheduling policy or platform internals.
 Do not add virtual stream hierarchies until actual protocol implementations
 establish the requirements.
+
+The current stream contracts are concepts in Core, not an inheritance hierarchy.
+TLS composes an owned `CancellableStream` with a private compiled OpenSSL engine.
+OpenSSL/native types stay out of public headers. The adapter serializes engine
+steps and uses Sync semaphores to coordinate encrypted transport reads/writes.
+It depends on public transport operations, not IOCP or Runtime internals.
+
+Sync's intrusive waiter record lives in its suspended coroutine frame. A primitive
+lock arbitrates delivery/grant, close and cancellation. Cancellation callbacks
+are registered before publication and disarmed outside that lock before cleanup;
+completion posts through the captured Context/executor. This shared machinery
+belongs to Sync's detail headers, not TCP or the platform completion backend.
 
 WebSocket framing/session code must not require a complete HTTP client/server
 stack. Its standard opening handshake still has HTTP semantics; independence

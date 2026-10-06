@@ -195,8 +195,20 @@
   exceptions to follow that library's native model. Keep this exception isolated;
   Weave and the other examples remain exception-disabled. The Trantor example uses
   only core's standard-library port header, without inheriting core's compile policy.
-- Keep the dependency graph directed: core <- io <- {runtime, tcp}. TCP must not
+- Keep the dependency graph directed: core <- io <- {runtime, tcp, sync}; TLS depends
+  on TCP and Sync, not Runtime. Stream concepts/helpers belong to portable Core.
+  Only TLS may discover/link OpenSSL; no OpenSSL/native types in public headers.
+  TCP must not
   require runtime, and runtime must not require TCP. Core has no OS dependencies.
+- Sync waiters live in coroutine frames. Register cancellation before publishing
+  them, arbitrate grants/delivery/close/cancel under the primitive lock, and post
+  through the captured executor. Disarm callbacks outside the lock before reclamation.
+  Close wakes but does not join; primitives must outlive waiters and owned permits.
+- TLS uses the proven OpenSSL engine, mandatory peer/hostname verification and
+  authenticated close_notify EOF. Serialize engine calls, retain write buffers
+  through retries, and never hold the transport send gate while waiting for input.
+  Cancellation after TLS state advances is terminal; drain before destruction.
+  TLS shutdown sends network records and is asynchronous, unlike TCP half-close.
 - tcp::serve is a TaskScope-backed convenience layer: client handlers take owned
   TcpStreams and return Task<void>. Isolate handler errors with an optional noexcept
   observer; accept/submission failures and cancellation cancel and drain clients
@@ -237,6 +249,10 @@
 - Leave one blank line between definitions and around namespace bodies. Within a
   function, separate setup, guards, operations, and results into readable logical
   groups. Keep closely related declarations together; do not space out every line.
+- Write for human readers from the first pass: no compressed one-line definitions
+  or long runs of statements without logical breaks. Expand state transitions and
+  callback setup into distinct blocks; formatting is not a substitute for readable
+  structure. Use named predicates instead of nested conditional expressions.
 - Keep the start of an if condition on the same line as if. Wrap long argument lists
   one argument per line with a two-space continuation indent, without column alignment.
 - Prefer named intermediate results and predicates to deeply nested calls, long

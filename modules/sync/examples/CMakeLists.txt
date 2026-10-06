@@ -1,0 +1,12 @@
+add_executable(weave_pipeline pipeline.cpp)
+target_link_libraries(weave_pipeline PRIVATE weave::sync)
+weave_no_exceptions(weave_pipeline)
+set_target_properties(weave_pipeline PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/$<CONFIG>")
+if(WEAVE_BUILD_TESTS)
+  add_test(NAME weave_pipeline_example COMMAND weave_pipeline)
+  set_tests_properties(weave_pipeline_example PROPERTIES TIMEOUT 15 LABELS examples)
+  if(WEAVE_ENABLE_ASAN AND MSVC)
+    set_tests_properties(weave_pipeline_example PROPERTIES
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${WEAVE_COMPILER_BIN}")
+  endif()
+endif()

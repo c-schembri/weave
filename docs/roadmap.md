@@ -67,17 +67,22 @@ are not proof that host-pressure timeouts or the historical warmup failure are f
 
 ## 3. Channels and semaphores
 
-Start with bounded asynchronous channels and a cancellation-aware semaphore.
-Specify closure, waiter ownership, fairness, backpressure and cross-thread wakeups
-before implementation. Suspended waiters must be removed or drained before their
-coroutine frames can be reclaimed. Do not block I/O workers while waiting.
+Implemented: bounded move-only channels with backpressure and drain-on-close,
+and FIFO semaphore acquisitions with owned RAII permits. Pending waits observe
+task cancellation and Context stop, and wake on their captured executor.
+Tests cover closure, ownership, cancellation races, independent Context threads,
+and both schedulers/layouts with four workers. [Contracts](synchronization.md).
 
 ## 4. Composable streams and TLS
 
-Use a small stream contract so protocol helpers can operate over TCP, TLS and test
-streams without requiring an inheritance hierarchy. Keep TLS optional, use a proven
-TLS implementation, and specify certificate verification and shutdown behavior.
-Do not implement cryptography or force TLS dependencies onto TCP-only consumers.
+Implemented: Core stream concepts/helpers and optional OpenSSL 3 TLS adapters.
+TLS supports verified client/server handshakes, TLS 1.2/1.3, ALPN, full-duplex I/O,
+and explicit graceful shutdown. TLS dependencies do not enter TCP-only consumers.
+[Stream contracts](streams.md) / [TLS contracts and limitations](tls.md).
+
+This is an initial experimental implementation, not a security audit or a complete
+production TLS stack. Revocation integration, mTLS, session-cache controls, and
+long-running hostile-peer stress remain future hardening work.
 
 ## 5. Linux io_uring
 

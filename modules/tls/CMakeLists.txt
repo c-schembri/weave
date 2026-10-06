@@ -1,0 +1,43 @@
+find_package(OpenSSL 3.0 REQUIRED COMPONENTS SSL Crypto)
+add_library(weave_tls src/engine.cpp src/windows/trust.cpp)
+weave_module(tls)
+target_link_libraries(weave_tls PUBLIC weave::tcp weave::sync PRIVATE OpenSSL::SSL OpenSSL::Crypto crypt32)
+
+# Imported OpenSSL libraries do not consistently describe their runtime DLLs.
+get_filename_component(openssl_prefix "${OPENSSL_INCLUDE_DIR}" DIRECTORY)
+set(WEAVE_TLS_RUNTIME_DIR "${openssl_prefix}/bin" CACHE PATH "Directory containing shared OpenSSL runtime DLLs")
+
+function(weave_tls_runtime target)
+  if(WIN32 AND EXISTS "${WEAVE_TLS_RUNTIME_DIR}")
+    file(GLOB dlls "${WEAVE_TLS_RUNTIME_DIR}/*crypto*.dll" "${WEAVE_TLS_RUNTIME_DIR}/*ssl*.dll")
+    foreach(dll IN LISTS dlls)
+      add_custom_command(TARGET ${target} POST_BUILD COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${dll}" "$<TARGET_FILE_DIR:${target}>")
+    endforeach()
+  endif()
+endfunction()
+
+if(WEAVE_BUILD_TESTS)
+  weave_add_test(weave_tls_tests tests/tls.cpp)
+  target_include_directories(weave_tls_tests PRIVATE "${PROJECT_SOURCE_DIR}/test_support")
+  target_link_libraries(weave_tls_tests PRIVATE weave::tls OpenSSL::SSL OpenSSL::Crypto)
+  if(TARGET weave_runtime)
+    target_sources(weave_tls_tests PRIVATE tests/runtime.cpp)
+    target_link_libraries(weave_tls_tests PRIVATE weave::runtime)
+  endif()
+  weave_tls_runtime(weave_tls_tests)
+
+  add_executable(weave_tls_interop tests/interop.cpp)
+  target_include_directories(weave_tls_interop PRIVATE "${PROJECT_SOURCE_DIR}/test_support")
+  target_link_libraries(weave_tls_interop PRIVATE weave::tls OpenSSL::SSL OpenSSL::Crypto)
+  weave_no_exceptions(weave_tls_interop)
+  weave_tls_runtime(weave_tls_interop)
+
+  add_test(NAME weave_tls_interop COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/interop.py"
+    --executable "$<TARGET_FILE:weave_tls_interop>")
+  set_tests_properties(weave_tls_interop PROPERTIES TIMEOUT 90 LABELS integration)
+  if(WEAVE_ENABLE_ASAN AND MSVC)
+    set_tests_properties(weave_tls_interop PROPERTIES
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${WEAVE_COMPILER_BIN}")
+  endif()
+endif()

@@ -23,6 +23,12 @@ if(WEAVE_ASAN AND WIN32)
   get_filename_component(compiler_bin "${WEAVE_CXX_COMPILER}" DIRECTORY)
   set(ENV{PATH} "${compiler_bin};$ENV{PATH}")
 endif()
+if(WEAVE_TLS_RUNTIME_DIR AND WIN32)
+  set(ENV{PATH} "${WEAVE_TLS_RUNTIME_DIR};$ENV{PATH}")
+endif()
+
+set(openssl_options "-DOPENSSL_ROOT_DIR=${OPENSSL_ROOT_DIR}"
+  "-DOPENSSL_USE_STATIC_LIBS=${OPENSSL_USE_STATIC_LIBS}")
 
 set(cases ${WEAVE_TEST_MODULES})
 if("tcp" IN_LIST WEAVE_TEST_MODULES AND "runtime" IN_LIST WEAVE_TEST_MODULES)
@@ -34,8 +40,11 @@ foreach(component IN LISTS cases)
   if(NOT component STREQUAL "core")
     list(APPEND expected io)
   endif()
-  if(component STREQUAL "tcp" OR component STREQUAL "runtime")
+  if(component STREQUAL "tcp" OR component STREQUAL "runtime" OR component STREQUAL "sync")
     list(APPEND expected "${component}")
+  endif()
+  if(component STREQUAL "tls")
+    list(APPEND expected tcp sync tls)
   endif()
   set(roots "${component}")
   set(requested "${component}")
@@ -45,13 +54,21 @@ foreach(component IN LISTS cases)
     set(requested tcp)
     set(expected "core;io;tcp")
     set(installed "core;io;tcp;runtime")
+    if(WEAVE_PACKAGE_TLS)
+      list(APPEND roots sync tls)
+      list(APPEND installed sync tls)
+    else()
+      list(APPEND roots sync)
+      list(APPEND installed sync)
+    endif()
   endif()
 
   message(STATUS "Package isolation: ${component}")
   run("${CMAKE_COMMAND}" -S "${WEAVE_SOURCE}" -B "${work}/library" ${generator}
     "-DCMAKE_CXX_COMPILER=${WEAVE_CXX_COMPILER}" "-DCMAKE_BUILD_TYPE=${WEAVE_CONFIG}"
     "-DWEAVE_MODULES=${roots}" "-DWEAVE_BUILD_TESTS=OFF" "-DWEAVE_BUILD_BENCHMARKS=OFF"
-    "-DWEAVE_BUILD_EXAMPLES=OFF" "-DWEAVE_ENABLE_ASAN=${WEAVE_ASAN}" "-DFETCHCONTENT_FULLY_DISCONNECTED=ON")
+    "-DWEAVE_BUILD_EXAMPLES=OFF" "-DWEAVE_ENABLE_ASAN=${WEAVE_ASAN}" "-DFETCHCONTENT_FULLY_DISCONNECTED=ON"
+    ${openssl_options})
   if(EXISTS "${work}/library/_deps")
     message(FATAL_ERROR "Library-only configuration must not populate third-party dependencies")
   endif()
@@ -63,7 +80,7 @@ foreach(component IN LISTS cases)
     "-DCMAKE_CXX_COMPILER=${WEAVE_CXX_COMPILER}" "-DCMAKE_BUILD_TYPE=${WEAVE_CONFIG}"
     "-Dweave_DIR=${work}/relocated/lib/cmake/weave" "-DWEAVE_COMPONENT=${requested}"
     "-DWEAVE_EXPECTED_MODULES=${expected}" "-DWEAVE_INSTALLED_MODULES=${installed}"
-    "-DWEAVE_PREFIX=${work}/relocated")
+    "-DWEAVE_PREFIX=${work}/relocated" ${openssl_options})
   run("${CMAKE_COMMAND}" --build "${work}/consumer" --config "${WEAVE_CONFIG}" --parallel 4)
   run("${CMAKE_CTEST_COMMAND}" --test-dir "${work}/consumer" -C "${WEAVE_CONFIG}" --output-on-failure)
 

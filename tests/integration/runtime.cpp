@@ -785,7 +785,10 @@ TEST_CASE_TEMPLATE(
   }
 }
 
-static weave::Task<void> detached_pending_accept(std::atomic<int> &destroyed, std::atomic<bool> &started)
+static weave::Task<void> detached_pending_accept(
+  std::atomic<int> &destroyed,
+  std::atomic<bool> &started,
+  std::atomic<weave::Context *> &binding)
 {
   struct Guard {
     std::atomic<int> &destroyed;
@@ -796,6 +799,7 @@ static weave::Task<void> detached_pending_accept(std::atomic<int> &destroyed, st
     }
   } guard{destroyed};
 
+  binding.store(weave::detail::current_context, std::memory_order_release);
   auto listener = co_await weave::tcp::listen("127.0.0.1", 0);
   started.store(true, std::memory_order_release);
   (void)co_await listener.accept();
@@ -809,15 +813,22 @@ TEST_CASE_TEMPLATE(
   support::SharedIo)
 {
   const auto mode = test_scheduler();
-  for (bool skip : {false, true}) {
-    for (int target : {0, 1, 2}) {
-      for (bool direct : {false, true}) {
+  const std::array completion_modes{false, true};
+  const std::array targets{0, 1, 2};
+  const std::array submission_modes{false, true};
+
+  for (bool skip : completion_modes) {
+    for (int target : targets) {
+      for (bool direct : submission_modes) {
         std::atomic<int> destroyed = 0, observed = 0;
         std::atomic<bool> started = false;
+        std::atomic<weave::Context *> binding = nullptr;
         auto runtime = support::create_runtime<Layout>(
           {.workers = 2, .scheduler = mode, .context = {.skip_successful_completions = skip}});
         REQUIRE(runtime);
-        auto launch = [&](weave::Context &) { return detached_pending_accept(destroyed, started); };
+        auto launch = [&](weave::Context &) {
+          return detached_pending_accept(destroyed, started, binding);
+        };
         auto on_error = [&](weave::Error error) noexcept {
           CHECK(error == std::errc::operation_canceled);
           ++observed;
@@ -844,9 +855,20 @@ TEST_CASE_TEMPLATE(
         REQUIRE(submit);
         REQUIRE(std::move(*submit).get());
         auto pending = runtime->spawn_on(0, [&](weave::Context &ctx) -> weave::Task<bool> {
-          while (!started.load(std::memory_order_acquire))
+          const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+
+          // The detached root may bind its listener on a stealing worker, not worker zero.
+          while (std::chrono::steady_clock::now() < deadline) {
+            if (started.load(std::memory_order_acquire)) {
+              const auto counters = binding.load(std::memory_order_acquire)->metrics();
+              if (counters.submitted > counters.completed)
+                co_return true;
+            }
+
             co_await ctx.yield();
-          co_return ctx.metrics().submitted > ctx.metrics().completed;
+          }
+
+          co_return false;
         });
         REQUIRE(pending);
         REQUIRE(std::move(*pending).get() == true);
