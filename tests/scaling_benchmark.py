@@ -177,6 +177,51 @@ class ScalingTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "does not match"):
                 bench_scaling.package(args)
 
+    def test_diagnostic_packaging_keeps_overruns_without_promoting_a_failed_run(self):
+        samples, metadata = evidence()
+        samples[0].update(wall_seconds=5.8, roundtrips_per_second=samples[0]["samples"] / 5.8)
+        with self.assertRaisesRegex(ValueError, "measurement window"):
+            bench_scaling.report(samples, metadata)
+        result = bench_scaling.report(samples, metadata, diagnostic=True)
+        self.assertFalse(result["timing_valid"])
+        self.assertEqual(len(result["window_failures"]), 1)
+        self.assertEqual(len(result["rows"]), 48)
+        self.assertEqual(sum(not pair["timing_valid"] for pair in result["comparisons"]), 2)
+        text = bench_scaling.full_markdown(result, metadata, "https://example.test/evidence")
+        self.assertIn("5.800000", text)
+        self.assertIn("not a passed benchmark run", text)
+        self.assertIn("timing failure; non-comparable", text)
+        with self.assertRaises(ValueError):
+            bench_scaling.report(samples[:-1], metadata, diagnostic=True)
+        invalid = [dict(samples[0], server_workers=16), *samples[1:]]
+        with self.assertRaises(ValueError):
+            bench_scaling.report(invalid, metadata, diagnostic=True)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            write_json(root / "environment.json", metadata)
+            write_json(root / "samples.json", {"samples": samples})
+            (root / "run.log").write_text("Error: A sample missed its measurement window.\n")
+            originals = {path.name: path.read_bytes() for path in root.glob("*.json")}
+            args = SimpleNamespace(directory=root, output=root / "diagnostic.zip",
+                                   evidence_url="https://example.test/evidence", diagnostic=True)
+            with patch.object(bench_scaling, "capture", return_value="synthetic"), redirect_stdout(io.StringIO()):
+                bench_scaling.package(args)
+            self.assertEqual(originals, {path.name: path.read_bytes() for path in root.glob("*.json")})
+            with zipfile.ZipFile(args.output) as archive:
+                self.assertNotIn("analysis.json", archive.namelist())
+                self.assertEqual(json.loads(archive.read("diagnostic-analysis.json")), result)
+                self.assertEqual(json.loads(archive.read("samples.json"))["samples"], samples)
+                self.assertIn("analysis-provenance.json", archive.namelist())
+
+    def test_one_core_timing_failure_flags_all_affected_scaling_rows(self):
+        samples, metadata = evidence()
+        base = next(sample for sample in samples if sample["server_workers"] == 1 and sample["backend"] == "weave")
+        base.update(wall_seconds=5.8, roundtrips_per_second=base["samples"] / 5.8)
+        result = bench_scaling.report(samples, metadata, diagnostic=True)
+        affected = [row for row in result["rows"] if row["workload"] == base["workload"] and row["backend"] == "weave"]
+        self.assertEqual(len(affected), 4)
+        self.assertTrue(all(row["window_failures"] for row in affected))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -62,7 +62,7 @@ def schedule(counts, workloads, repetitions, seed):
                 yield repetition, count, workload, backend
 
 
-def report(samples, metadata):
+def report(samples, metadata, *, diagnostic=False):
     require(metadata["protocol"] == PROTOCOL and not metadata["smoke"], "Not scaling performance evidence.")
     require(re.fullmatch(r"[0-9a-f]{40}", metadata["revision"]) is not None and
             type(metadata["worktree"]) is list, "Missing source provenance.")
@@ -90,8 +90,10 @@ def report(samples, metadata):
         require(int(count) + client_cores > metadata["available_physical_cores"], "A supported core count was silently skipped.")
     duration = metadata["duration_ms"] / 1000
     require(all(type(sample.get("server_workers")) is int and str(sample["server_workers"]) in masks and
-                duration <= sample["wall_seconds"] <= duration + 1 and sample["client_cores"] <= client_cores + 0.5
-                for sample in samples), "A sample missed its worker budget or measurement window.")
+                sample["client_cores"] <= client_cores + 0.5 for sample in samples), "A sample missed its worker budget.")
+    failures = [{key: sample[key] for key in ("server_workers", "workload", "backend", "repetition", "wall_seconds")}
+                for sample in samples if not duration <= sample["wall_seconds"] <= duration + 1]
+    require(diagnostic or not failures, "A sample missed its measurement window.")
     rows = []
     comparisons = []
     repetitions = metadata["repetitions"]
@@ -111,7 +113,10 @@ def report(samples, metadata):
                       for index in range(repetitions)]
             low, high = interval(ratios)
             speedup = median(ratios)
+            window_failures = [failure for failure in failures if failure["server_workers"] in (1, count) and
+                               failure["workload"] == workload and failure["backend"] == backend]
             row.update(server_workers=count, speedup=speedup, speedup_ci90=[low, high], efficiency=speedup / count,
+                       window_failures=window_failures,
                        throughput_noisy=row["metrics"]["roundtrips_per_second"]["cv_pct"] > 10 or (high - low) / speedup > 0.20,
                        p99_noisy=row["metrics"]["p99_us"]["cv_pct"] > 25,
                        client_busy=row["metrics"]["client_cores"]["median"] >= client_cores * 0.90)
@@ -124,18 +129,27 @@ def report(samples, metadata):
                 ratios = [groups["weave"][index]["roundtrips_per_second"] /
                           groups[baseline][index]["roundtrips_per_second"] for index in range(repetitions)]
                 comparisons.append({"server_workers": count, "workload": workload[0], "baseline": baseline,
-                                    "ratio": median(ratios), "ci90": list(interval(ratios))})
-    return {"protocol": PROTOCOL, "rows": rows, "comparisons": comparisons}
+                                    "ratio": median(ratios), "ci90": list(interval(ratios)),
+                                    "timing_valid": not any(failure["server_workers"] == count and
+                                                            failure["workload"] == workload[0] and
+                                                            failure["backend"] in ("weave", baseline)
+                                                            for failure in failures)})
+    return {"protocol": PROTOCOL, "timing_valid": not failures, "window_failures": failures,
+            "rows": rows, "comparisons": comparisons}
 
 
 def quality(rows):
     notes = []
+    if any(row["window_failures"] for row in rows):
+        notes.append("timing failure")
     if any(row["throughput_noisy"] for row in rows):
         notes.append("throughput noisy")
     if any(row["p99_noisy"] for row in rows):
         notes.append("p99 noisy")
     if any(row["client_busy"] for row in rows):
-        notes.append("client busy")
+        names = {"weave": "Weave", "asio": "Asio", "tokio": "Tokio"}
+        clients = ", ".join(names[row["backend"]] for row in rows if row["client_busy"])
+        notes.append(f"client busy ({clients})")
     return "; ".join(notes) or "within limits"
 
 
@@ -148,12 +162,16 @@ def compact_markdown(result, metadata, evidence_url, workload=WORKLOADS[0][0]):
     timestamp = datetime.fromisoformat(metadata["timestamp"]).strftime("%Y-%m-%d %H:%M %z")
     lines = [f"Local Windows run: {timestamp}, {cpu}. "
              f"Source: [`{source[:7]}`](https://github.com/c-schembri/weave/commit/{source}){dirty}.", "",
-             f"Workload: **{label}** per round trip.", "",
+             f"Workload: **{label}**, frame size each way.", "",
              f"{metadata['repetitions']} x {metadata['duration_ms'] / 1000:g}s per library/core count/workload. "
              f"One worker per server core; {metadata['client_cores']} fixed, physically separate client cores. "
              "Median validated round trips/second; higher is better.", "",
              "| Server cores | Weave | Asio | Tokio | Weave vs 1 core | Max throughput CV | Notes |",
              "| ---: | ---: | ---: | ---: | ---: | ---: | --- |"]
+    if not result["timing_valid"]:
+        warning = (f"**Diagnostic run: timing validation failed in {len(result['window_failures'])} measurement window(s).** "
+                   "All samples are retained. This is not a passed benchmark run; affected cohorts are non-comparable.")
+        lines[0:0] = [warning, ""]
     for count in metadata["requested_cores"]:
         if str(count) not in metadata["cpu_masks"]:
             lines.append(f"| {count} | N/A | N/A | N/A | N/A | N/A | insufficient physical cores |")
@@ -173,6 +191,16 @@ def compact_markdown(result, metadata, evidence_url, workload=WORKLOADS[0][0]):
 
 def full_markdown(result, metadata, evidence_url):
     lines = ["# Local Windows Runtime Scaling", ""]
+    if not result["timing_valid"]:
+        lines.extend(["## Timing Validation Failure", "",
+                      "The collector rejected this run. Diagnostic analysis retains every sample; "
+                      "overrunning windows are not silently discarded or rerun. The cause is not established.", "",
+                      "| Workload | Cores | Library | Repetition | Actual window seconds |",
+                      "| --- | ---: | --- | ---: | ---: |"])
+        for failure in result["window_failures"]:
+            lines.append(f"| {failure['workload']} | {failure['server_workers']} | {failure['backend']} | "
+                         f"{failure['repetition']} | {failure['wall_seconds']:.6f} |")
+        lines.append("")
     for workload, label in zip(WORKLOADS, LABELS, strict=True):
         lines.extend([f"## {label}", "", compact_markdown(result, metadata, evidence_url, workload[0])])
     lines.extend(["## Per-library Measurements", "",
@@ -189,12 +217,12 @@ def full_markdown(result, metadata, evidence_url):
                      f"{value('server_private_mb'):.2f} | [{low:.3f}, {high:.3f}] | {quality([row])} |")
     lines.extend(["", "## Matched Throughput Comparisons", "", "Weave / baseline, matched by repetition; "
                   "90% whole-block bootstrap intervals are exploratory, not simultaneous guarantees.", "",
-                  "| Workload | Cores | Baseline | Median ratio | Paired CI90 |",
-                  "| --- | ---: | --- | ---: | --- |"])
+                  "| Workload | Cores | Baseline | Median ratio | Paired CI90 | Notes |",
+                  "| --- | ---: | --- | ---: | --- | --- |"])
     for pair in result["comparisons"]:
         low, high = pair["ci90"]
         lines.append(f"| {pair['workload']} | {pair['server_workers']} | {pair['baseline']} | {pair['ratio']:.3f} | "
-                     f"[{low:.3f}, {high:.3f}] |")
+                     f"[{low:.3f}, {high:.3f}] | {'timing failure; non-comparable' if not pair['timing_valid'] else ''} |")
     lines.extend(["", "All samples and outliers retained; no selective retries or adaptive stopping. "
                   f"Elapsed measurement supervisor time: {metadata['elapsed_seconds']:.1f}s."])
     return "\n".join(lines) + "\n"
@@ -268,15 +296,29 @@ def package(args):
     root = args.directory.resolve(strict=True)
     metadata = read_json(root / "environment.json")
     require(not metadata["worktree"], "Publish a clean-source run, not an uncommitted working tree.")
-    result = report(read_json(root / "samples.json")["samples"], metadata)
-    require(result == read_json(root / "analysis.json"), "Stored analysis does not match raw evidence.")
+    diagnostic = getattr(args, "diagnostic", False)
+    result = report(read_json(root / "samples.json")["samples"], metadata, diagnostic=diagnostic)
+    if diagnostic:
+        require(not result["timing_valid"], "Diagnostic packaging requires a timing failure, not a successful run.")
+        require(not (root / "analysis.json").exists(), "Do not replace stored analysis with diagnostic analysis.")
+    else:
+        require(result == read_json(root / "analysis.json"), "Stored analysis does not match raw evidence.")
     require(not args.output.exists(), "Refusing to overwrite an evidence archive.")
-    files = [root / name for name in ("environment.json", "samples.json", "analysis.json", "run.log")]
+    files = [root / name for name in ("environment.json", "samples.json", "run.log")]
+    if not diagnostic:
+        files.append(root / "analysis.json")
     for pattern in ("*.client.log", "*.server.log", "*.failure.json"):
         files.extend(root.glob(f"cores-*/*{pattern[1:]}"))
     with zipfile.ZipFile(args.output, "x", compression=zipfile.ZIP_DEFLATED) as archive:
         for path in sorted(files):
             archive.write(path, path.relative_to(root))
+        if diagnostic:
+            archive.writestr("diagnostic-analysis.json", json.dumps(result, indent=2) + "\n")
+            provenance = {"revision": capture(["git", "rev-parse", "HEAD"]),
+                          "worktree": capture(["git", "status", "--porcelain"]).splitlines(),
+                          "analyzer": file_hash(Path(__file__).resolve()),
+                          "note": "Diagnostic reanalysis after the original collector rejected a timing window; thresholds unchanged."}
+            archive.writestr("analysis-provenance.json", json.dumps(provenance, indent=2) + "\n")
         archive.writestr("summary.md", full_markdown(result, metadata, args.evidence_url))
     print(compact_markdown(result, metadata, args.evidence_url))
     print(f"Archive SHA256: {sha256(args.output)}")
@@ -302,6 +344,7 @@ def main():
     archival.add_argument("--directory", type=Path, required=True)
     archival.add_argument("--output", type=Path, required=True)
     archival.add_argument("--evidence-url", required=True)
+    archival.add_argument("--diagnostic", action="store_true", help="Archive a complete sweep with failed timing validation, never as a passed run.")
     args = parser.parse_args()
     return benchmark(args) if args.command == "run" else package(args)
 

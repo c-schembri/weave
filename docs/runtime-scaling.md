@@ -91,6 +91,15 @@ environment/source/binary hashes, affinity masks, every sample, per-process logs
 full analysis and summary. Existing evidence is never overwritten. Partial or
 smoke runs cannot be published as completed performance measurements.
 
+Each actual measurement window must be between the requested duration and one
+second beyond it. A longer outstanding exchange fails timing validation, even if
+the process eventually completes and every response is correct. Never omit that
+sample or selectively retry it. A complete failed sweep can be uploaded explicitly
+with `package --diagnostic`; it is labelled failed, retains every raw sample, and
+stores separately named diagnostic analysis with its own analyzer provenance.
+Affected cohorts are non-comparable, not promoted into passed performance evidence.
+Structural errors, incomplete matrices and smoke runs still cannot be packaged.
+
 ```sh
 # Protocol/cleanup check only, not performance evidence.
 python scripts/bench_scaling.py run --smoke --duration-ms 100 --repetitions 1 --warmup-ms 50 --timeout-seconds 120

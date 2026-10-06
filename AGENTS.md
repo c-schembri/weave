@@ -101,6 +101,9 @@
   Benchmark processes run sequentially, outside correctness/release pipelines.
   Publish curated README results with hardware, sampling, and source provenance;
   upload complete raw evidence as GitHub release assets, not tracked JSON/logs.
+  Retain timing failures and outliers. A complete failed sweep may be archived as
+  explicitly labelled diagnostic evidence; never present it as a passed run,
+  silently omit failed samples, or selectively retry them for favourable results.
   Label noisy comparisons inconclusive for the affected metric. P99 noise must
   not invalidate stable throughput; client saturation is not proof of server capacity.
 - When benchmarking, compare against the pinned Asio baseline using the same
