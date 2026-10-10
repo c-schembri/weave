@@ -127,6 +127,8 @@ the verification name. `connect_timeout` is positive integral seconds, at most
 86400; Weave does not accept an infinite timeout. Application names fall back
 to `fallback_application_name` and then `weave` when empty.
 
+### TLS Modes
+
 TLS supports `verify-full` (the default), `verify-ca`, `require`, `prefer`, `allow`
 and `disable`, through `Options::tls_mode` or `sslmode`. TLS file paths
 are stored in `tls_options`; loading occurs during connection establishment.
