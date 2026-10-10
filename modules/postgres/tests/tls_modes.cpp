@@ -42,6 +42,16 @@ static void connected(
   std::string_view mode)
 {
   ++sessions;
+  if (!connection && !rejected(mode)) {
+    std::fprintf(
+      stderr,
+      "Connection failed: %s (%d)\n",
+      connection.error().message().c_str(),
+      connection.error().value());
+    auto formatted = report.format();
+    if (formatted)
+      std::fprintf(stderr, "%s\n", formatted->c_str());
+  }
   check(connection.has_value() != rejected(mode));
   check(report.completed && report.current.elapsed.count() > 0);
   std::chrono::microseconds accounted{0};

@@ -1,9 +1,12 @@
 cmake_minimum_required(VERSION 3.25)
 
 function(run)
-  cmake_parse_arguments(PARSE_ARGV 0 command "" "" "")
+  cmake_parse_arguments(PARSE_ARGV 0 command "" "TIMEOUT" "")
+  if(NOT command_TIMEOUT)
+    set(command_TIMEOUT 60)
+  endif()
   execute_process(COMMAND ${command_UNPARSED_ARGUMENTS}
-    RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT 60)
+    RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error TIMEOUT ${command_TIMEOUT})
   if(NOT result STREQUAL "0")
     message(FATAL_ERROR "Command failed (${result}): ${ARGV}\n${output}\n${error}")
   endif()
@@ -96,7 +99,7 @@ foreach(component IN LISTS cases)
   if(EXISTS "${work}/library/_deps")
     message(FATAL_ERROR "Library-only configuration must not populate third-party dependencies")
   endif()
-  run("${CMAKE_COMMAND}" --build "${work}/library" --config "${WEAVE_CONFIG}" --parallel 4)
+  run(TIMEOUT 300 "${CMAKE_COMMAND}" --build "${work}/library" --config "${WEAVE_CONFIG}" --parallel 4)
   run("${CMAKE_COMMAND}" --install "${work}/library" --config "${WEAVE_CONFIG}" --prefix "${work}/install")
   # Consume a relocated copy, never the source/build tree's include directories.
   file(COPY "${work}/install/" DESTINATION "${work}/relocated")
@@ -105,7 +108,7 @@ foreach(component IN LISTS cases)
     "-Dweave_DIR=${work}/relocated/lib/cmake/weave" "-DWEAVE_COMPONENT=${requested}"
     "-DWEAVE_EXPECTED_MODULES=${expected}" "-DWEAVE_INSTALLED_MODULES=${installed}"
     "-DWEAVE_PREFIX=${work}/relocated" ${openssl_options})
-  run("${CMAKE_COMMAND}" --build "${work}/consumer" --config "${WEAVE_CONFIG}" --parallel 4)
+  run(TIMEOUT 180 "${CMAKE_COMMAND}" --build "${work}/consumer" --config "${WEAVE_CONFIG}" --parallel 4)
   run("${CMAKE_CTEST_COMMAND}" --test-dir "${work}/consumer" -C "${WEAVE_CONFIG}" --output-on-failure --no-tests=error)
 
   if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux" AND WEAVE_POSTGRES_LDAP AND

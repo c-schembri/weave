@@ -279,9 +279,13 @@ int main(int argc, char **argv)
       options.gss = *provider;
       options.gss_encryption = pg::GssEncryption::require;
       options.hosts = {{"127.0.0.1", *port}, {"127.0.0.1", *refused}};
-    } else if (mode == "tls")
+    } else if (mode == "tls") {
       options.plaintext = false;
-    else if (mode == "invalid")
+      // The peer tests negotiation refusal, not repeated platform trust-store loading.
+      auto credentials = weave::TlsContext::client();
+      check(credentials.has_value());
+      options.tls = std::move(*credentials);
+    } else if (mode == "invalid")
       options.user.clear();
     else if (mode == "deadline")
       options.connect_timeout = 100ms;

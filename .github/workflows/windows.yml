@@ -19,7 +19,7 @@ jobs:
     name: MSVC / ${{ matrix.configuration }}
     runs-on: windows-2022
     # Cold OpenSSL/ICU builds share this budget with the full correctness/package suite.
-    timeout-minutes: 40
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -59,7 +59,8 @@ jobs:
           persist-credentials: false
 
       - name: Cache TLS and PostgreSQL dependencies
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        id: dependency-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: build/vcpkg/binary-cache
           key: openssl-icu-windows-2022-x64-e182cb4dd2df2ab02f66a1aabd5f35bbdc9522c7-v1
@@ -73,6 +74,13 @@ jobs:
         run: |
           python -c "from pathlib import Path; Path('build/vcpkg/binary-cache').mkdir(parents=True, exist_ok=True)"
           build\vcpkg\vcpkg.exe install openssl:x64-windows icu:x64-windows --disable-metrics
+
+      - name: Save completed dependencies before testing
+        if: steps.dependency-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: build/vcpkg/binary-cache
+          key: openssl-icu-windows-2022-x64-e182cb4dd2df2ab02f66a1aabd5f35bbdc9522c7-v1
 
       - name: Configure without benchmarks
         run: cmake --preset ${{ matrix.configure }} -DWEAVE_BUILD_BENCHMARKS=OFF -DWEAVE_POSTGRES_BENCHMARKS=OFF -DOPENSSL_ROOT_DIR="%GITHUB_WORKSPACE%/build/vcpkg/installed/x64-windows" -DICU_ROOT="%GITHUB_WORKSPACE%/build/vcpkg/installed/x64-windows"

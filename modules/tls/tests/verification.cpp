@@ -8,6 +8,47 @@
 #include <thread>
 #include <atomic>
 #include <algorithm>
+#ifdef _WIN32
+#include <windows.h>
+#include <aclapi.h>
+#endif
+
+#ifdef _WIN32
+
+static bool current_user_owns_file(const std::filesystem::path &path)
+{
+  HANDLE token = nullptr;
+  if (!OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token)) {
+    if (GetLastError() != ERROR_NO_TOKEN || !OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+      return false;
+  }
+  DWORD size = 0;
+  GetTokenInformation(token, TokenUser, nullptr, 0, &size);
+  std::vector<std::byte> data(size);
+  const bool read = size && GetTokenInformation(token, TokenUser, data.data(), size, &size);
+  CloseHandle(token);
+  if (!read)
+    return false;
+
+  auto wide = path.wstring();
+  PSID owner = nullptr;
+  PSECURITY_DESCRIPTOR descriptor = nullptr;
+  const auto status = GetNamedSecurityInfoW(
+    wide.data(),
+    SE_FILE_OBJECT,
+    OWNER_SECURITY_INFORMATION,
+    &owner,
+    nullptr,
+    nullptr,
+    nullptr,
+    &descriptor);
+  const auto *user = reinterpret_cast<TOKEN_USER *>(data.data());
+  const bool matches = status == ERROR_SUCCESS && owner && EqualSid(owner, user->User.Sid);
+  LocalFree(descriptor);
+  return matches;
+}
+
+#endif
 
 static bool transfer(weave::detail::TlsEngine &from, weave::detail::TlsEngine &to)
 {
@@ -73,6 +114,8 @@ TEST_CASE("TLS verification is explicit and unverified certificates are not auth
       options.verification = policy;
       auto context = weave::TlsContext::client(options);
       REQUIRE(context);
+      if (!context)
+        continue;
       CHECK(context->verification() == policy);
       auto server = weave::TlsContext::server(
         {.certificate_file = files.leaf,
@@ -80,15 +123,21 @@ TEST_CASE("TLS verification is explicit and unverified certificates are not auth
           .min_version = version,
           .max_version = version});
       REQUIRE(server);
+      if (!server)
+        continue;
       auto client = weave::detail::TlsEngine::create(*context, false, "wrong.invalid");
       auto peer = weave::detail::TlsEngine::create(*server, true, "");
       REQUIRE(client);
       REQUIRE(peer);
+      if (!client || !peer)
+        continue;
       const bool ready = handshake(*client, *peer);
       CHECK(ready == (policy != weave::TlsVerification::hostname));
       if (ready) {
         auto info = client->info();
         REQUIRE(info);
+        if (!info)
+          continue;
         CHECK_FALSE(info->hostname_verified);
         CHECK(info->certificate_verified == (policy != weave::TlsVerification::none));
         CHECK(info->peer.has_value() == (policy != weave::TlsVerification::none));
@@ -104,6 +153,8 @@ TEST_CASE("TLS trust failures remain errors in certificate-only and hostname mod
   fixture::Certificates files;
   auto server = weave::TlsContext::server({.certificate_file = files.leaf, .private_key_file = files.private_key});
   REQUIRE(server);
+  if (!server)
+    return;
   CHECK(server->verification() == weave::TlsVerification::none);
   auto authenticated = weave::TlsContext::server(
     {.certificate_file = files.leaf,
@@ -111,15 +162,21 @@ TEST_CASE("TLS trust failures remain errors in certificate-only and hostname mod
       .client_auth = weave::TlsClientAuth::required,
       .ca_file = files.ca});
   REQUIRE(authenticated);
+  if (!authenticated)
+    return;
   CHECK(authenticated->verification() == weave::TlsVerification::certificate);
   const std::array policies{weave::TlsVerification::certificate, weave::TlsVerification::hostname};
   for (auto policy : policies) {
     auto context = weave::TlsContext::client({.ca_file = files.untrusted, .verification = policy});
     REQUIRE(context);
+    if (!context)
+      continue;
     auto client = weave::detail::TlsEngine::create(*context, false, "localhost");
     auto peer = weave::detail::TlsEngine::create(*server, true, "");
     REQUIRE(client);
     REQUIRE(peer);
+    if (!client || !peer)
+      continue;
     CHECK_FALSE(handshake(*client, *peer));
     CHECK(client->handshake().error == weave::TlsError::certificate_verification);
   }
@@ -146,11 +203,17 @@ TEST_CASE("TLS traffic keys are opt-in private append-only NSS records across co
           .min_version = version,
           .max_version = version,
           .key_log_file = server_path});
+      INFO("Client key-log setup: " << (client ? "OK" : client.error().message()));
+      INFO("Server key-log setup: " << (server ? "OK" : server.error().message()));
       REQUIRE(client);
       REQUIRE(server);
+      if (!client || !server)
+        return;
       auto second = weave::TlsContext::client(
         {.ca_file = files.ca, .min_version = version, .max_version = version, .key_log_file = path});
       REQUIRE(second);
+      if (!second)
+        return;
       std::atomic<unsigned> completed{0};
       std::vector<std::thread> threads;
       for (int index = 0; index < 8; ++index) {
@@ -167,14 +230,22 @@ TEST_CASE("TLS traffic keys are opt-in private append-only NSS records across co
     }
     const std::array paths{path, server_path};
     for (const auto &file : paths) {
+#ifdef _WIN32
+      CHECK(current_user_owns_file(file));
+#endif
       std::ifstream input(file);
       REQUIRE(input);
+      if (!input)
+        continue;
       unsigned records = 0;
       std::string line;
       while (std::getline(input, line)) {
         std::istringstream record(line);
         std::string label, random, secret, extra;
-        REQUIRE(static_cast<bool>(record >> label >> random >> secret));
+        const bool parsed = static_cast<bool>(record >> label >> random >> secret);
+        REQUIRE(parsed);
+        if (!parsed)
+          break;
         CHECK_FALSE(static_cast<bool>(record >> extra));
         CHECK(
           (version == weave::TlsVersion::tls12 ? label == "CLIENT_RANDOM" : label.find("SECRET") != std::string::npos));
@@ -203,6 +274,8 @@ TEST_CASE("TLS traffic keys are opt-in private append-only NSS records across co
       std::filesystem::perm_options::replace,
       error);
     REQUIRE_FALSE(error);
+    if (error)
+      return;
     CHECK_FALSE(weave::TlsContext::client({.key_log_file = unsafe.string()}));
     CHECK(std::filesystem::remove(unsafe, error));
     CHECK_FALSE(error);

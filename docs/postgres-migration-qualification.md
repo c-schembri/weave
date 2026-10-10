@@ -80,3 +80,33 @@ and `WEAVE_POSTGRES_SERVER_BIN` enable owned live qualification. These are
 functional tests, not benchmarks. No benchmarks or performance claims were
 updated. Temporary proof sources were deleted, existing staging/HEAD preserved,
 and the previous closure archive and WSL recovery backup left intact.
+
+## Hosted Windows Closure (11 October 2026)
+
+The first hosted checkpoint run is retained as
+[failed evidence](https://github.com/c-schembri/weave/actions/runs/38052888754),
+not counted as passing qualification. Debug failed four of 94 checks; Release
+failed five. ASan exceeded the whole-job limit with an incomplete inventory.
+
+New Windows key-log files now explicitly assign ownership to the effective
+user rather than inheriting an elevated token's Administrators-group owner.
+The private user/SYSTEM ACL and existing-file rejection policy are unchanged.
+The verification test checks actual file ownership and guards failed setup
+Results instead of crashing after exception-free REQUIRE failures.
+
+The COPY-reset peer now permits a successful queued send before observing the
+reset during COPY completion; both paths must retain the terminal failure.
+The TLS-refusal report fixture prepares its verified credential snapshot before
+opening connections, rather than repeatedly loading platform trust on workers.
+No protocol error, peer timeout or runtime matrix is silently ignored.
+
+Package compiler commands have separate build budgets; operational test deadlines
+are unchanged. CI saves successfully built dependencies before tests, so later
+failures no longer discard the expensive cold build. Its 60-minute ceiling covers
+cold dependency compilation, examples and the full correctness/package suite;
+it is not a benchmark deadline. Benchmarks remain disabled.
+
+Local post-correction Debug passed the four affected checks, Release passed both
+key-log/mode checks and COPY-reset controls, and ASan passed verification, TLS
+modes, COPY/failure and connection-report controls. Hosted rerun results must be
+read from the Windows workflow, not inferred from those local passes.

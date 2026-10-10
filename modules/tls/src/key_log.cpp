@@ -160,8 +160,12 @@ public:
     LocalMemory sid;
     if (!ConvertSidToStringSidW(user, reinterpret_cast<LPWSTR *>(&sid.value)))
       return std::unexpected(native_error());
-    std::wstring policy = L"D:P(A;;FA;;;SY)(A;;FA;;;";
-    policy += static_cast<wchar_t *>(sid.value);
+    const auto *user_sid = static_cast<wchar_t *>(sid.value);
+    // Elevated tokens can default to an Administrators-group owner.
+    std::wstring policy = L"O:";
+    policy += user_sid;
+    policy += L"D:P(A;;FA;;;SY)(A;;FA;;;";
+    policy += user_sid;
     policy += L")";
     LocalMemory descriptor;
     if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(

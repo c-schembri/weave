@@ -113,6 +113,8 @@ static weave::Task<void> phase(pg::Connection &connection, std::string_view mode
     co_await connection.start_copy("PROBE");
     std::vector<std::byte> data(8 * 1024 * 1024);
     co_await connection.write_copy(data);
+    // A send may queue successfully before the peer's reset reaches this socket.
+    co_await connection.end_copy();
   } else if (mode == "exchange_read") {
     auto exchange = co_await connection.exchange("PROBE");
     co_await exchange.next();

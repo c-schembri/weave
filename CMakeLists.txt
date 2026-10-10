@@ -147,6 +147,10 @@ if(WEAVE_BUILD_TESTS)
       "-DOPENSSL_USE_STATIC_LIBS=${OPENSSL_USE_STATIC_LIBS}"
       "-DWEAVE_TLS_RUNTIME_DIR=${WEAVE_TLS_RUNTIME_DIR}"
       -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/package/components.cmake")
-    set_tests_properties(package_components_${component} PROPERTIES TIMEOUT 180 LABELS packaging)
+    set(package_timeout 180)
+    if(component STREQUAL "postgres" OR (component STREQUAL "all" AND TARGET weave_postgres))
+      set(package_timeout 600)
+    endif()
+    set_tests_properties(package_components_${component} PROPERTIES TIMEOUT ${package_timeout} LABELS packaging)
   endforeach()
 endif()
