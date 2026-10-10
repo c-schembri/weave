@@ -18,7 +18,8 @@ jobs:
   test:
     name: MSVC / ${{ matrix.configuration }}
     runs-on: windows-2022
-    timeout-minutes: 20
+    # Cold OpenSSL/ICU builds share this budget with the full correctness/package suite.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:

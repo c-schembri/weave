@@ -4,8 +4,8 @@ The optional `weave::postgres` module implements PostgreSQL's wire protocol;
 it does not wrap or link libpq. Its authentication uses OpenSSL Crypto and ICU
 SASLprep. It depends on TLS, TCP, IO and Sync, not Runtime.
 
-This module is under development. The [parity checklist](postgres-parity.md)
-is the release scope, not a claim of complete libpq compatibility.
+The implemented scope is experimental. The [closed checkpoint](postgres-release.md)
+and [parity checklist](postgres-parity.md) define its scope, not complete libpq compatibility.
 The [individual API audit](postgres-api-audit.md) records concrete mappings and gaps.
 The [latest libpq measurements](postgres-benchmarks.md) record throughput, CPU,
 tail latency and its measurement limitations separately from correctness gates.
@@ -34,7 +34,9 @@ weave::Task<void> example()
 ```
 
 TLS is verified by default. Set `Options::tls` to an immutable client credential
-snapshot for private CAs or mTLS. There is no fallback to unauthenticated TLS.
+snapshot for private CAs or mTLS. Ordinary defaults never fall back to
+unauthenticated transport; [weaker TLS modes](postgres-connections.md#tls-modes)
+require explicit opt-in and retain their documented fallback restrictions.
 `plaintext = true` explicitly opts into unencrypted transport; it is intended
 for trusted local deployments and matched benchmarks. Cleartext password
 authentication requires verified TLS and an explicit opt-in; deprecated MD5
