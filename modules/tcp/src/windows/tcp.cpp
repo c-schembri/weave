@@ -2,6 +2,8 @@
 #include <weave/tcp.hpp>
 #include "windows/iocp.hpp"
 #include "windows/address.hpp"
+#include "windows/socket.hpp"
+#include "../socket_options.hpp"
 #include <weave/resolve.hpp>
 #include <weave/io/detail/trace.hpp>
 #include <mswsock.h>
@@ -35,6 +37,22 @@ Error invalid()
 Error busy()
 {
   return std::make_error_code(std::errc::operation_in_progress);
+}
+
+Result<void> socket_option(SOCKET socket, int level, int option, DWORD value)
+{
+  if (setsockopt(socket, level, option, reinterpret_cast<const char *>(&value), sizeof(value)) != 0)
+    return std::unexpected(last_error());
+  return {};
+}
+
+Result<DWORD> socket_option(SOCKET socket, int level, int option)
+{
+  DWORD value = 0;
+  int size = sizeof(value);
+  if (getsockopt(socket, level, option, reinterpret_cast<char *>(&value), &size) != 0)
+    return std::unexpected(last_error());
+  return value;
 }
 
 template <class T>
@@ -74,188 +92,7 @@ struct TcpOperationFlag {
   }
 };
 
-struct TcpIoAwaiter {
-  enum Kind {
-    receive,
-    send,
-    accept,
-    connect
-  } kind;
-
-  Context &ctx;
-  bool skip_success;
-  detail::Operation operation{};
-  SOCKET socket;
-  WSABUF buffer{};
-  SOCKET accepted = INVALID_SOCKET;
-  const detail::SocketAddress *endpoint = nullptr;
-  LPFN_ACCEPTEX accept_fn = nullptr;
-  LPFN_CONNECTEX connect_fn = nullptr;
-  std::array<std::byte, 2 * (sizeof(sockaddr_in6) + 16)> addresses{};
-  DWORD address_bytes = sizeof(sockaddr_in) + 16;
-  CancelToken cancellation;
-
-  struct CancelOperation {
-    HANDLE socket;
-    OVERLAPPED *operation;
-
-    void operator()() const noexcept
-    {
-      if (!CancelIoEx(socket, operation))
-        detail::require(GetLastError() == ERROR_NOT_FOUND);
-    }
-  };
-
-  std::optional<std::stop_callback<CancelOperation>> cancellation_callback;
-
-  TcpIoAwaiter(Kind k, Context &c, SOCKET s, bool skip) : kind(k), ctx(c), skip_success(skip), socket(s)
-  {
-  }
-
-  bool await_ready() const noexcept
-  {
-    return false;
-  }
-
-  template <class P>
-  bool await_suspend(std::coroutine_handle<P> continuation) noexcept
-  {
-    detail::IoAccess::check_execution(ctx);
-    auto &io = detail::IoAccess::state(ctx);
-    cancellation = continuation.promise().cancellation;
-    if (cancellation.stop_requested()) {
-      operation.error = std::make_error_code(std::errc::operation_canceled);
-      return false;
-    }
-
-    // Exclude shutdown cancellation until the operation has been submitted.
-    std::shared_lock submission(io.io_mutex_, std::defer_lock);
-
-    if (io.scheduler_group_)
-      submission.lock();
-
-    if (io.stopping_.load(std::memory_order_relaxed)) {
-      operation.error = win_error(ERROR_OPERATION_ABORTED);
-      return false;
-    }
-
-    operation.event.state = continuation.address();
-    operation.event.invoke = [](void *state) noexcept { std::coroutine_handle<>::from_address(state).resume(); };
-    operation.event.executor = detail::current_executor;
-    operation.context = &ctx;
-
-    DWORD flags = 0;
-    DWORD bytes = 0;
-    int result = 0;
-#if defined(WEAVE_PROFILE_RUNTIME)
-    const auto submission_start = std::chrono::steady_clock::now();
-#endif
-    detail::trace(detail::TraceEvent::io_submit_begin, continuation.address(), kind);
-    switch (kind) {
-    case receive:
-#if defined(WEAVE_PROFILE_RUNTIME)
-      detail::IoAccess::count(ctx, io.metrics_.read_calls);
-#endif
-      result = WSARecv(socket, &buffer, 1, &bytes, &flags, &operation.overlapped, nullptr);
-      break;
-    case send:
-#if defined(WEAVE_PROFILE_RUNTIME)
-      detail::IoAccess::count(ctx, io.metrics_.write_calls);
-#endif
-      result = WSASend(socket, &buffer, 1, &bytes, 0, &operation.overlapped, nullptr);
-      break;
-    case accept: {
-      auto succeeded = accept_fn(
-        socket,
-        accepted,
-        addresses.data(),
-        0,
-        address_bytes,
-        address_bytes,
-        &bytes,
-        &operation.overlapped);
-      result = succeeded ? 0 : SOCKET_ERROR;
-      break;
-    }
-    case connect: {
-      auto succeeded = connect_fn(socket, endpoint->data(), endpoint->size, nullptr, 0, &bytes, &operation.overlapped);
-      result = succeeded ? 0 : SOCKET_ERROR;
-      break;
-    }
-    }
-
-    const auto error = result != 0 ? WSAGetLastError() : 0;
-    detail::trace(detail::TraceEvent::io_submit_end, continuation.address(), error);
-#if defined(WEAVE_PROFILE_RUNTIME)
-    const auto submission_time = std::chrono::steady_clock::now() - submission_start;
-    const auto submission_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(submission_time).count();
-    detail::IoAccess::count(ctx, io.metrics_.submission_ns, submission_ns);
-    if (kind == receive)
-      detail::IoAccess::count(ctx, io.metrics_.read_submission_ns, submission_ns);
-    if (kind == send)
-      detail::IoAccess::count(ctx, io.metrics_.write_submission_ns, submission_ns);
-#endif
-    if (result != 0) {
-      if (error != WSA_IO_PENDING) {
-        operation.error = win_error(error);
-        return false;
-      }
-    }
-#if defined(WEAVE_PROFILE_RUNTIME)
-    if (result == 0)
-      detail::IoAccess::count(ctx, io.metrics_.immediate_successes);
-#endif
-    if (result == 0 && skip_success) {
-      operation.transferred = bytes;
-
-      // Limit inline chaining so a busy stream cannot indefinitely starve peers.
-      auto &budget = io.scheduler_group_ ? detail::inline_budget : io.inline_budget_;
-      if (++budget < 32) {
-        detail::IoAccess::count(ctx, io.metrics_.inline_completions);
-        return false;
-      }
-
-      budget = 0;
-      detail::IoAccess::count(ctx, io.metrics_.fairness_posts);
-      auto posted = PostQueuedCompletionStatus(io.port_, bytes, 0, &operation.overlapped);
-      detail::require(posted != FALSE);
-    }
-
-    // Without skip-success, synchronous success still queues an OS packet.
-    detail::IoAccess::count(ctx, io.metrics_.submitted);
-    if (!(result == 0 && skip_success)) {
-      cancellation_callback.emplace(
-        cancellation.native_token(),
-        CancelOperation{reinterpret_cast<HANDLE>(socket), &operation.overlapped});
-    }
-    return true;
-  }
-
-  Result<std::size_t> await_resume() noexcept
-  {
-    // Wait for a racing CancelIoEx callback before releasing the native record/socket.
-    cancellation_callback.reset();
-    // Keep the socket alive through error translation, before the awaiter's guard is released.
-    if (operation.failed) {
-      DWORD flags = 0, transferred = 0;
-      if (!WSAGetOverlappedResult(socket, &operation.overlapped, &transferred, FALSE, &flags))
-        operation.error = last_error();
-    }
-
-    if (operation.error.value() == ERROR_OPERATION_ABORTED && (cancellation.stop_requested() || ctx.stop_requested()))
-      operation.error = std::make_error_code(std::errc::operation_canceled);
-    if (operation.error)
-      return std::unexpected(operation.error);
-#if defined(WEAVE_PROFILE_RUNTIME)
-    auto &io = detail::IoAccess::state(ctx);
-    if (kind == receive)
-      detail::IoAccess::count(ctx, io.metrics_.read_bytes, operation.transferred);
-    if (kind == send)
-      detail::IoAccess::count(ctx, io.metrics_.write_bytes, operation.transferred);
-#endif
-    return operation.transferred;
-  }
-};
+using TcpIoAwaiter = detail::SocketIoAwaiter<>;
 
 Result<SOCKET> make_socket(Context &context, bool &skip_success, int family)
 {
@@ -534,6 +371,72 @@ Result<void> TcpStream::no_delay(bool enabled)
     return std::unexpected(last_error());
 
   return {};
+}
+
+Result<void> TcpStream::keep_alive(TcpKeepAliveOptions options)
+{
+  detail::IoAccess::check_thread(*ctx_);
+  if (!detail::valid_keep_alive(options))
+    return std::unexpected(invalid());
+
+  if (auto result = socket_option(socket_, SOL_SOCKET, SO_KEEPALIVE, options.enabled); !result)
+    return result;
+  if (!options.enabled)
+    return {};
+
+  if (options.idle.count() != 0) {
+    auto result = socket_option(socket_, IPPROTO_TCP, TCP_KEEPIDLE, static_cast<DWORD>(options.idle.count()));
+    if (!result)
+      return result;
+  }
+  if (options.interval.count() != 0) {
+    auto result = socket_option(socket_, IPPROTO_TCP, TCP_KEEPINTVL, static_cast<DWORD>(options.interval.count()));
+    if (!result)
+      return result;
+  }
+  if (options.probes != 0) {
+    auto result = socket_option(socket_, IPPROTO_TCP, TCP_KEEPCNT, static_cast<DWORD>(options.probes));
+    if (!result)
+      return result;
+  }
+  return {};
+}
+
+Result<TcpKeepAliveOptions> TcpStream::keep_alive_options() const
+{
+  detail::IoAccess::check_thread(*ctx_);
+  auto enabled = socket_option(socket_, SOL_SOCKET, SO_KEEPALIVE);
+  if (!enabled)
+    return std::unexpected(enabled.error());
+  auto idle = socket_option(socket_, IPPROTO_TCP, TCP_KEEPIDLE);
+  if (!idle)
+    return std::unexpected(idle.error());
+  auto interval = socket_option(socket_, IPPROTO_TCP, TCP_KEEPINTVL);
+  if (!interval)
+    return std::unexpected(interval.error());
+  auto probes = socket_option(socket_, IPPROTO_TCP, TCP_KEEPCNT);
+  if (!probes)
+    return std::unexpected(probes.error());
+
+  return TcpKeepAliveOptions{
+    .enabled = *enabled != 0,
+    .idle = std::chrono::seconds{*idle},
+    .interval = std::chrono::seconds{*interval},
+    .probes = static_cast<u32>(*probes)};
+}
+
+Result<void> TcpStream::user_timeout(std::chrono::milliseconds timeout)
+{
+  detail::IoAccess::check_thread(*ctx_);
+  if (!detail::valid_socket_timeout(timeout))
+    return std::unexpected(invalid());
+  return std::unexpected(std::make_error_code(std::errc::operation_not_supported));
+}
+
+Result<std::chrono::milliseconds> TcpStream::user_timeout() const
+{
+  detail::IoAccess::check_thread(*ctx_);
+  return std::unexpected(std::make_error_code(std::errc::operation_not_supported));
 }
 
 Result<void> TcpStream::shutdown_send()

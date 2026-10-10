@@ -1,6 +1,8 @@
 #include <weave/tcp.hpp>
 #include "linux/uring.hpp"
 #include "linux/address.hpp"
+#include "linux/socket.hpp"
+#include "../socket_options.hpp"
 #include <weave/resolve.hpp>
 #include <algorithm>
 #include <cerrno>
@@ -33,6 +35,22 @@ Error busy()
   return std::make_error_code(std::errc::operation_in_progress);
 }
 
+Result<void> socket_option(int socket, int level, int option, int value)
+{
+  if (setsockopt(socket, level, option, &value, sizeof(value)) != 0)
+    return std::unexpected(last_error());
+  return {};
+}
+
+Result<int> socket_option(int socket, int level, int option)
+{
+  int value = 0;
+  socklen_t size = sizeof(value);
+  if (getsockopt(socket, level, option, &value, &size) != 0)
+    return std::unexpected(last_error());
+  return value;
+}
+
 struct TcpOperationFlag {
   bool &value;
 
@@ -47,105 +65,7 @@ struct TcpOperationFlag {
   }
 };
 
-struct TcpIoAwaiter {
-  enum Kind {
-    receive,
-    send,
-    accept,
-    connect
-  } kind;
-
-  Context &context;
-  detail::Operation operation{};
-  void *buffer = nullptr;
-  unsigned size = 0;
-  const detail::SocketAddress *endpoint = nullptr;
-
-  struct Cancel {
-    detail::Operation *operation;
-
-    void operator()() const noexcept
-    {
-      detail::IoAccess::cancel(*operation);
-    }
-  };
-
-  std::optional<std::stop_callback<Cancel>> cancellation;
-  std::optional<std::stop_callback<Cancel>> shutdown;
-
-  TcpIoAwaiter(Kind kind, Context &context, int socket) : kind(kind), context(context)
-  {
-    operation.context = &context;
-    operation.provider = this;
-    operation.socket = socket;
-    if (kind == receive)
-      operation.kind = detail::Operation::Kind::receive;
-    if (kind == send)
-      operation.kind = detail::Operation::Kind::send;
-    operation.prepare = [](io_uring_sqe *entry, detail::Operation &operation) noexcept {
-      auto &awaiter = *static_cast<TcpIoAwaiter *>(operation.provider);
-      switch (awaiter.kind) {
-      case receive:
-        io_uring_prep_recv(entry, operation.socket, awaiter.buffer, awaiter.size, 0);
-        break;
-      case send:
-        io_uring_prep_send(entry, operation.socket, awaiter.buffer, awaiter.size, MSG_NOSIGNAL);
-        break;
-      case accept:
-        io_uring_prep_accept(entry, operation.socket, nullptr, nullptr, SOCK_CLOEXEC);
-        break;
-      case connect:
-        io_uring_prep_connect(entry, operation.socket, awaiter.endpoint->data(), awaiter.endpoint->size);
-        break;
-      }
-    };
-  }
-
-  bool await_ready() const noexcept
-  {
-    return false;
-  }
-
-  template <class P>
-  bool await_suspend(std::coroutine_handle<P> continuation) noexcept
-  {
-    detail::IoAccess::check_execution(context);
-    const auto token = continuation.promise().cancellation;
-    const auto stopping = detail::context_cancellation(context);
-    if (token.stop_requested() || stopping.stop_requested()) {
-      operation.result = -ECANCELED;
-      return false;
-    }
-
-    operation.event.state = continuation.address();
-    operation.event.invoke = [](void *state) noexcept {
-      std::coroutine_handle<>::from_address(state).resume();
-    };
-    operation.event.executor = detail::current_executor;
-    cancellation.emplace(token.native_token(), Cancel{&operation});
-    shutdown.emplace(stopping.native_token(), Cancel{&operation});
-    detail::IoAccess::submit(operation);
-    return true;
-  }
-
-  Result<std::size_t> await_resume() noexcept
-  {
-    cancellation.reset();
-    shutdown.reset();
-    if (operation.result == -EINTR && (operation.cancelled || context.stop_requested()))
-      return std::unexpected(std::make_error_code(std::errc::operation_canceled));
-    if (operation.result < 0)
-      return std::unexpected(native_error(-operation.result));
-#if defined(WEAVE_PROFILE_RUNTIME)
-    auto &state = detail::IoAccess::state(context);
-    if (kind == receive)
-      detail::IoAccess::count(context, state.metrics_.read_bytes, operation.result);
-    if (kind == send)
-      detail::IoAccess::count(context, state.metrics_.write_bytes, operation.result);
-#endif
-    return static_cast<std::size_t>(operation.result);
-  }
-};
+using TcpIoAwaiter = detail::SocketIoAwaiter;
 
 Result<int> make_socket(Context &context, int family)
 {
@@ -358,6 +278,83 @@ Result<void> TcpStream::no_delay(bool enabled)
   if (setsockopt(static_cast<int>(socket_), IPPROTO_TCP, TCP_NODELAY, &value, sizeof(value)) != 0)
     return std::unexpected(last_error());
   return {};
+}
+
+Result<void> TcpStream::keep_alive(TcpKeepAliveOptions options)
+{
+  detail::IoAccess::check_thread(*ctx_);
+  if (!detail::valid_keep_alive(options))
+    return std::unexpected(invalid());
+
+  if (auto result = socket_option(static_cast<int>(socket_), SOL_SOCKET, SO_KEEPALIVE, options.enabled); !result)
+    return result;
+  if (!options.enabled)
+    return {};
+
+  if (options.idle.count() != 0) {
+    auto result = socket_option(
+      static_cast<int>(socket_),
+      IPPROTO_TCP,
+      TCP_KEEPIDLE,
+      static_cast<int>(options.idle.count()));
+    if (!result)
+      return result;
+  }
+  if (options.interval.count() != 0) {
+    auto result = socket_option(
+      static_cast<int>(socket_),
+      IPPROTO_TCP,
+      TCP_KEEPINTVL,
+      static_cast<int>(options.interval.count()));
+    if (!result)
+      return result;
+  }
+  if (options.probes != 0) {
+    auto result = socket_option(static_cast<int>(socket_), IPPROTO_TCP, TCP_KEEPCNT, static_cast<int>(options.probes));
+    if (!result)
+      return result;
+  }
+  return {};
+}
+
+Result<TcpKeepAliveOptions> TcpStream::keep_alive_options() const
+{
+  detail::IoAccess::check_thread(*ctx_);
+  auto enabled = socket_option(static_cast<int>(socket_), SOL_SOCKET, SO_KEEPALIVE);
+  if (!enabled)
+    return std::unexpected(enabled.error());
+  auto idle = socket_option(static_cast<int>(socket_), IPPROTO_TCP, TCP_KEEPIDLE);
+  if (!idle)
+    return std::unexpected(idle.error());
+  auto interval = socket_option(static_cast<int>(socket_), IPPROTO_TCP, TCP_KEEPINTVL);
+  if (!interval)
+    return std::unexpected(interval.error());
+  auto probes = socket_option(static_cast<int>(socket_), IPPROTO_TCP, TCP_KEEPCNT);
+  if (!probes)
+    return std::unexpected(probes.error());
+
+  return TcpKeepAliveOptions{
+    .enabled = *enabled != 0,
+    .idle = std::chrono::seconds{*idle},
+    .interval = std::chrono::seconds{*interval},
+    .probes = static_cast<u32>(*probes)};
+}
+
+Result<void> TcpStream::user_timeout(std::chrono::milliseconds timeout)
+{
+  detail::IoAccess::check_thread(*ctx_);
+  if (!detail::valid_socket_timeout(timeout))
+    return std::unexpected(invalid());
+  return socket_option(static_cast<int>(socket_), IPPROTO_TCP, TCP_USER_TIMEOUT, static_cast<int>(timeout.count()));
+}
+
+Result<std::chrono::milliseconds> TcpStream::user_timeout() const
+{
+  detail::IoAccess::check_thread(*ctx_);
+  auto value = socket_option(static_cast<int>(socket_), IPPROTO_TCP, TCP_USER_TIMEOUT);
+  if (!value)
+    return std::unexpected(value.error());
+  return std::chrono::milliseconds{*value};
 }
 
 Result<void> TcpStream::shutdown_send()

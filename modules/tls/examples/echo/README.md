@@ -5,7 +5,7 @@ run concurrently through `tcp::serve`; each owns its encrypted stream and buffer
 The handler exchanges `close_notify` on EOF rather than treating socket closure
 as a successful TLS shutdown.
 
-Build the optional TLS preset with OpenSSL 3 installed:
+Build the optional TLS preset with a security-patched OpenSSL 3.5+ installed:
 
 ```sh
 cmake --preset windows-tls -DOPENSSL_ROOT_DIR=C:/Libraries/openssl

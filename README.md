@@ -42,7 +42,8 @@ each client's receive buffer and waits for its callback before reading again.
 
 Windows x64, Visual Studio 2022 C++ workload, CMake 3.25+, Git, and Python 3.11+
 for tests. Linux uses GCC 14+ with liburing 2.3+ and a kernel supporting io_uring.
-Python is not needed for library-only builds; OpenSSL 3 is required only for TLS.
+Python is not needed for library-only builds. TLS needs OpenSSL 3.5+;
+PostgreSQL also needs ICU 70+.
 [Linux/WSL setup and current limitations](docs/linux.md).
 
 ```sh
@@ -99,6 +100,10 @@ Streams provide `read()`, `read_exactly()`, and `write_all()`. A zero-length rea
 means EOF. IPv4, IPv6, and asynchronous DNS are supported.
 [TCP guide](docs/tcp.md) / [Addresses and DNS](docs/addresses.md).
 
+**Local sockets.** `local::connect()` and `local::listen()` use the same Task and
+stream model for filesystem sockets on Windows/Linux and abstract sockets on Linux.
+[Local sockets and peer credentials](docs/local.md).
+
 **Errors and timeouts.** Handle errors explicitly only where you want recovery:
 
 ```cpp
@@ -121,8 +126,33 @@ cancellation and cross-context wakeups. [Guide and example](docs/synchronization
 
 **Streams and TLS.** Small stream concepts let helpers work over TCP, TLS, and
 custom transports. Optional OpenSSL-backed TLS has verified client/server
-handshakes and the same read/write API. [Stream helpers](docs/streams.md) /
+handshakes, mTLS, explicit session/revocation policy and the same read/write API.
+[Stream helpers](docs/streams.md) /
 [TLS setup, example, and limitations](docs/tls.md).
+
+**PostgreSQL.** Native protocol Tasks cover verified connections, queries,
+prepared statements, batching, row streaming and COPY. A blocking facade drives
+the same engine. The implemented scope is experimental, not drop-in libpq parity.
+[API and examples](docs/postgres.md) / [Parity checklist](docs/postgres-parity.md) /
+[libpq benchmarks](docs/postgres-benchmarks.md).
+
+[TLS modes and explicit libpq configuration migration](docs/postgres-connections.md#explicit-libpq-migration-profile) /
+[Connection diagnostics](docs/postgres-diagnostics.md#connection-reports).
+
+[Supported scope and deployment boundaries](docs/postgres-release.md).
+
+Latest native Windows PostgreSQL run (10 October 2026), four workers / 32 connections:
+
+| Plaintext workload | Weave affine ops/s | libpq ops/s |
+| --- | ---: | ---: |
+| Simple query | 105,239 | 114,188 |
+| Prepared query | 113,959 | 123,078 |
+| Batch statements | 528,713 | 535,137 |
+| Row-heavy query | 27,897 | 33,266 |
+
+Seven sequential samples; throughput spread 1.9-7.9%. This is not a uniform win.
+[TLS, both schedulers, tail latency and memory](docs/postgres-benchmarks.md) /
+[Raw evidence and exact working-tree provenance](https://github.com/c-schembri/weave/releases/tag/benchmarks-20261010-postgres-final).
 
 ## Use In Your Project
 
@@ -134,9 +164,11 @@ Include and link only the components you need. TCP does not depend on Runtime.
 | Context, submission, timers | `<weave/io.hpp>` | `weave::io` |
 | Multicore runtime | `<weave/runtime.hpp>` | `weave::runtime` |
 | TCP streams and servers | `<weave/tcp.hpp>` | `weave::tcp` |
+| Local socket streams | `<weave/local.hpp>` | `weave::local` |
 | Channels and semaphores | `<weave/sync.hpp>` | `weave::sync` |
 | Stream concepts and helpers | `<weave/stream.hpp>` | `weave::core` |
-| Verified TLS streams (OpenSSL 3) | `<weave/tls.hpp>` | `weave::tls` |
+| Verified TLS streams (OpenSSL 3.5+) | `<weave/tls.hpp>` | `weave::tls` |
+| Native PostgreSQL client (experimental) | `<weave/postgres.hpp>` | `weave::postgres` |
 
 ```cmake
 set(WEAVE_MODULES "tcp;runtime" CACHE STRING "" FORCE)

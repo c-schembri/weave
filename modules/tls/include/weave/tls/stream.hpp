@@ -2,6 +2,7 @@
 
 #include <weave/stream.hpp>
 #include <weave/semaphore.hpp>
+#include <weave/timer.hpp>
 #include <weave/tls/detail/engine.hpp>
 #include <array>
 #include <algorithm>
@@ -14,9 +15,16 @@ class TlsStream;
 namespace tls {
 
 template <CancellableStream S>
-Task<TlsStream<S>> client(S transport, const TlsContext &context, std::string server_name);
+Task<TlsStream<S>> client(S transport, TlsContext context, std::string server_name, TlsHandshakeOptions options = {});
 template <CancellableStream S>
-Task<TlsStream<S>> server(S transport, const TlsContext &context);
+Task<TlsStream<S>> client(
+  S transport,
+  TlsContext context,
+  std::string server_name,
+  TlsSession session,
+  TlsHandshakeOptions options = {});
+template <CancellableStream S>
+Task<TlsStream<S>> server(S transport, TlsContext context, TlsHandshakeOptions options = {});
 
 } // namespace tls
 
@@ -26,9 +34,11 @@ class TlsStream {
   static_assert(std::is_nothrow_destructible_v<S>);
 
   template <CancellableStream T>
-  friend Task<TlsStream<T>> tls::client(T, const TlsContext &, std::string);
+  friend Task<TlsStream<T>> tls::client(T, TlsContext, std::string, TlsHandshakeOptions);
   template <CancellableStream T>
-  friend Task<TlsStream<T>> tls::server(T, const TlsContext &);
+  friend Task<TlsStream<T>> tls::client(T, TlsContext, std::string, TlsSession, TlsHandshakeOptions);
+  template <CancellableStream T>
+  friend Task<TlsStream<T>> tls::server(T, TlsContext, TlsHandshakeOptions);
 
   S transport_;
   detail::TlsEngine engine_;
@@ -46,8 +56,16 @@ class TlsStream {
     static_cast<void>(transport_.cancel());
   }
 
-  Task<void> flush()
+  Task<void> flush(bool send_barrier)
   {
+    if (!send_barrier) {
+      auto pending = engine_.has_output();
+      if (!pending)
+        co_await fail(pending.error());
+      if (!*pending)
+        co_return;
+    }
+
     auto permit = co_await send_.acquire();
     std::array<std::byte, 16384> buffer;
 
@@ -92,7 +110,7 @@ class TlsStream {
     }
   }
 
-  Task<void> progress(detail::TlsStep step)
+  Task<void> progress(detail::TlsStep step, bool send_barrier = true)
   {
     if (step.action == detail::TlsAction::failed) {
       poison(step.error);
@@ -100,7 +118,7 @@ class TlsStream {
     }
 
     // Never hold the transport write gate while waiting for transport input.
-    auto sent = co_await as_result(flush());
+    auto sent = co_await as_result(flush(send_barrier));
     if (!sent) {
       poison(sent.error());
       co_await fail(sent.error());
@@ -150,7 +168,9 @@ class TlsStream {
 
     for (;;) {
       auto step = engine_.read(buffer);
-      co_await progress(step);
+      // Reads with no outgoing records must not wait behind a backpressured writer.
+      // Writes still join the send gate even if another flush took their records.
+      co_await progress(step, false);
 
       if (step.action == detail::TlsAction::eof)
         co_return std::size_t{0};
@@ -266,6 +286,44 @@ public:
     return engine_.alpn();
   }
 
+  std::string cipher() const
+  {
+    return engine_.cipher();
+  }
+
+  bool session_reused() const noexcept
+  {
+    return engine_.session_reused();
+  }
+
+  Result<TlsSession> session() const
+  {
+    return engine_.session();
+  }
+
+  Result<TlsInfo> info() const
+  {
+    return engine_.info();
+  }
+
+  Result<TlsPeerIdentity> peer_identity() const
+  {
+    return engine_.peer_identity();
+  }
+
+  Result<std::vector<std::byte>> channel_binding() const
+  {
+    return engine_.channel_binding();
+  }
+
+  Result<std::vector<std::byte>> export_keying_material(
+    std::string_view label,
+    std::size_t size,
+    std::optional<std::span<const std::byte>> context = std::nullopt) const
+  {
+    return engine_.export_keying_material(label, size, context);
+  }
+
 private:
   static S take_transport(TlsStream &other) noexcept
   {
@@ -277,31 +335,71 @@ private:
 namespace tls {
 
 template <CancellableStream S>
-Task<TlsStream<S>> client(S transport, const TlsContext &context, std::string server_name)
+Task<TlsStream<S>> client(S transport, TlsContext context, std::string server_name, TlsHandshakeOptions options)
 {
   co_await cancellation_point();
+  if (options.timeout <= std::chrono::milliseconds{0} || options.timeout > std::chrono::hours{24})
+    co_await fail(std::errc::invalid_argument);
 
-  auto engine = detail::TlsEngine::create(context, false, server_name);
+  auto engine = detail::TlsEngine::create(
+    context,
+    false,
+    server_name,
+    nullptr,
+    options.required_protocol,
+    options.server_name_indication,
+    options.client_certificate);
   if (!engine)
     co_await fail(engine.error());
 
   TlsStream<S> stream{std::move(transport), std::move(*engine)};
-  co_await stream.handshake();
+  co_await timeout(options.timeout, stream.handshake());
 
   co_return std::move(stream);
 }
 
 template <CancellableStream S>
-Task<TlsStream<S>> server(S transport, const TlsContext &context)
+Task<TlsStream<S>> client(
+  S transport,
+  TlsContext context,
+  std::string server_name,
+  TlsSession session,
+  TlsHandshakeOptions options)
 {
   co_await cancellation_point();
+  if (options.timeout <= std::chrono::milliseconds{0} || options.timeout > std::chrono::hours{24})
+    co_await fail(std::errc::invalid_argument);
 
-  auto engine = detail::TlsEngine::create(context, true, {});
+  auto engine = detail::TlsEngine::create(
+    context,
+    false,
+    server_name,
+    &session,
+    options.required_protocol,
+    options.server_name_indication,
+    options.client_certificate);
   if (!engine)
     co_await fail(engine.error());
 
   TlsStream<S> stream{std::move(transport), std::move(*engine)};
-  co_await stream.handshake();
+  co_await timeout(options.timeout, stream.handshake());
+
+  co_return std::move(stream);
+}
+
+template <CancellableStream S>
+Task<TlsStream<S>> server(S transport, TlsContext context, TlsHandshakeOptions options)
+{
+  co_await cancellation_point();
+  if (options.timeout <= std::chrono::milliseconds{0} || options.timeout > std::chrono::hours{24})
+    co_await fail(std::errc::invalid_argument);
+
+  auto engine = detail::TlsEngine::create(context, true, {}, nullptr, options.required_protocol);
+  if (!engine)
+    co_await fail(engine.error());
+
+  TlsStream<S> stream{std::move(transport), std::move(*engine)};
+  co_await timeout(options.timeout, stream.handshake());
 
   co_return std::move(stream);
 }

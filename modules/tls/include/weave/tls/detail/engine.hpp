@@ -3,6 +3,8 @@
 #include <weave/tls/context.hpp>
 #include <weave/types.hpp>
 #include <span>
+#include <optional>
+#include <string_view>
 
 namespace weave::detail {
 
@@ -34,7 +36,14 @@ class TlsEngine {
   explicit TlsEngine(std::unique_ptr<Impl> impl) noexcept;
 
 public:
-  static Result<TlsEngine> create(const TlsContext &context, bool server, const std::string &name);
+  static Result<TlsEngine> create(
+    const TlsContext &context,
+    bool server,
+    const std::string &name,
+    TlsSession *session = nullptr,
+    std::string_view required_protocol = {},
+    bool server_name_indication = true,
+    TlsCertificateMode client_certificate = TlsCertificateMode::allow);
 
   TlsEngine(TlsEngine &&other) noexcept;
   ~TlsEngine();
@@ -49,12 +58,23 @@ public:
   TlsStep write(std::span<const std::byte> buffer) noexcept;
   TlsStep shutdown(bool wait_peer) noexcept;
 
+  Result<bool> has_output() const noexcept;
   Result<std::size_t> output(std::span<std::byte> buffer) noexcept;
   Result<bool> needs_input(u64 generation) const noexcept;
   Result<void> input(std::span<const std::byte> buffer) noexcept;
 
   TlsVersion version() const noexcept;
   std::string alpn() const;
+  std::string cipher() const;
+  bool session_reused() const noexcept;
+  Result<TlsInfo> info() const;
+  Result<TlsSession> session() const;
+  Result<TlsPeerIdentity> peer_identity() const;
+  Result<std::vector<std::byte>> channel_binding() const;
+  Result<std::vector<std::byte>> export_keying_material(
+    std::string_view label,
+    std::size_t size,
+    std::optional<std::span<const std::byte>> context) const;
 };
 
 struct TlsOperationGuard {

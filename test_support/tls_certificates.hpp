@@ -41,7 +41,13 @@ inline void extension(X509 *certificate, X509 *issuer, int id, const char *value
   require(added == 1);
 }
 
-inline Certificate certificate(EVP_PKEY *key, X509 *issuer, EVP_PKEY *signer, long serial, bool expired)
+inline Certificate certificate(
+  EVP_PKEY *key,
+  X509 *issuer,
+  EVP_PKEY *signer,
+  long serial,
+  bool expired,
+  const char *purpose = "serverAuth")
 {
   Certificate value{X509_new(), X509_free};
   require(value != nullptr);
@@ -65,6 +71,9 @@ inline Certificate certificate(EVP_PKEY *key, X509 *issuer, EVP_PKEY *signer, lo
   require(X509_set_issuer_name(value.get(), issuer ? X509_get_subject_name(issuer) : name) == 1);
 
   auto *authority = issuer ? issuer : value.get();
+  extension(value.get(), authority, NID_subject_key_identifier, "hash");
+  if (issuer)
+    extension(value.get(), authority, NID_authority_key_identifier, "keyid:always");
   extension(value.get(), authority, NID_basic_constraints, issuer ? "critical,CA:FALSE" : "critical,CA:TRUE");
   extension(
     value.get(),
@@ -72,7 +81,7 @@ inline Certificate certificate(EVP_PKEY *key, X509 *issuer, EVP_PKEY *signer, lo
     NID_key_usage,
     issuer ? "critical,digitalSignature" : "critical,keyCertSign,cRLSign");
   if (issuer) {
-    extension(value.get(), authority, NID_ext_key_usage, "serverAuth");
+    extension(value.get(), authority, NID_ext_key_usage, purpose);
     extension(value.get(), authority, NID_subject_alt_name, "DNS:localhost,IP:127.0.0.1,IP:::1");
   }
 
@@ -95,6 +104,8 @@ struct Certificates {
   std::string leaf;
   std::string expired;
   std::string private_key;
+  std::string client;
+  std::string client_key;
 
   Certificates()
   {
@@ -114,6 +125,8 @@ struct Certificates {
     leaf = (directory / "server.pem").string();
     expired = (directory / "expired.pem").string();
     private_key = (directory / "key.pem").string();
+    client = (directory / "client.pem").string();
+    client_key = (directory / "client-key.pem").string();
 
     auto root_key = key();
     auto root = certificate(root_key.get(), nullptr, nullptr, 1, false);
@@ -122,22 +135,30 @@ struct Certificates {
     auto server_key = key();
     auto server = certificate(server_key.get(), root.get(), root_key.get(), 3, false);
     auto stale = certificate(server_key.get(), root.get(), root_key.get(), 4, true);
+    auto identity_key = key();
+    auto identity = certificate(identity_key.get(), root.get(), root_key.get(), 5, false, "clientAuth");
 
     write_certificate(ca, root.get());
     write_certificate(untrusted, other.get());
     write_certificate(leaf, server.get());
     write_certificate(expired, stale.get());
+    write_certificate(client, identity.get());
 
     Bio file{BIO_new_file(private_key.c_str(), "w"), BIO_free};
     require(file != nullptr);
     require(PEM_write_bio_PrivateKey(file.get(), server_key.get(), nullptr, nullptr, 0, nullptr, nullptr) == 1);
+
+    Bio identity_file{BIO_new_file(client_key.c_str(), "w"), BIO_free};
+    require(identity_file != nullptr);
+    require(
+      PEM_write_bio_PrivateKey(identity_file.get(), identity_key.get(), nullptr, nullptr, 0, nullptr, nullptr) == 1);
   }
 
   Certificates(const Certificates &) = delete;
 
   ~Certificates()
   {
-    const std::array files{ca, untrusted, leaf, expired, private_key};
+    const std::array files{ca, untrusted, leaf, expired, private_key, client, client_key};
     std::error_code error;
     for (const auto &file : files)
       std::filesystem::remove(file, error);

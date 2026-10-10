@@ -15,8 +15,10 @@ modules/
   io/         Context, completion engine, task ownership, spawn and JoinHandle
   runtime/    Worker threads, scheduling policies, cross-context coordination
   tcp/        Sockets, listeners, connect/accept, reads/writes, native socket lifetime
+  local/      Local/Unix-domain streams, listeners, Linux peer credentials
   sync/       Bounded channels, semaphore permits, cancellation-aware wait queues
   tls/        Optional OpenSSL engine and generic encrypted-stream adapter
+  postgres/   Native PostgreSQL protocol, authentication, queries and blocking facade
 tests/
   integration/   Contracts spanning runtime, TCP, and tasks
   package/       Isolated builds and installed consumer/header checks
@@ -60,13 +62,17 @@ There is no global library `include/`, `src/`, or catch-all `detail/` directory.
 returning, without depending on Runtime or adding another execution layer.
 
 ```text
-core <- io <- {tcp, sync, runtime}
+core <- io <- {tcp, sync, runtime, local}
                 ^     ^
                  \   /
-                  tls -> OpenSSL 3
+                  tls -> OpenSSL 3.5+
+                   ^
+                postgres -> Local + OpenSSL Crypto + ICU (private dependencies)
 
-TCP, Sync and Runtime do not depend on each other.
+TCP, Local, Sync and Runtime do not depend on each other.
 TLS does not require Runtime; Core's stream contracts have no OS dependency.
+PostgreSQL uses Local privately and does not require Runtime or libpq.
+libpq is an optional benchmark dependency only.
 ```
 
 `WEAVE_MODULES` selects build roots, with dependencies added automatically.
@@ -95,8 +101,11 @@ being private alone is not a reason to use `detail`.
 
 Library `.cpp` files keep file/platform-specific helpers, types, and state in an
 anonymous namespace inside `weave`, before public/member implementations. Windows
-TCP's socket helpers, operation guard, and native awaiter are local; they do not
-become part of the shared backend contract. Timer awaiters, IOCP completion keys,
+TCP's socket helpers and operation guard remain file-local. TCP and Local now
+share native socket awaiters in IO's private `src/<platform>/socket.hpp`; these
+retain the existing submission, cancellation and completion routing, with a
+Windows address-buffer capacity parameter for the larger Unix-domain address.
+Neither transport reaches into the other. Timer awaiters, IOCP completion keys,
 and the runtime's current-task pointer are local to their respective implementations.
 
 Private nested `Context::Impl` and `Runtime::Impl` definitions stay in their
@@ -109,7 +118,7 @@ or public API is introduced by these visibility boundaries.
 
 ### Future protocols
 
-Add HTTP, WebSocket, PostgreSQL, and other modules as real features arrive,
+Add HTTP, WebSocket, and other modules as real features arrive,
 not as empty placeholder directories. Each gets its own include entry point and
 target with the smallest honest dependencies. Protocol code should depend on a
 transport contract rather than worker scheduling policy or platform internals.
@@ -132,8 +141,18 @@ WebSocket framing/session code must not require a complete HTTP client/server
 stack. Its standard opening handshake still has HTTP semantics; independence
 does not remove that protocol requirement. Keep HTTP-stack integration in an
 optional adapter target, and decide ownership of a proven handshake parser when
-implementing it. PostgreSQL should likewise depend on its transport and optional
-TLS, not HTTP. We are establishing those boundaries, not implementing them now.
+implementing it. PostgreSQL uses public TCP/TLS operations, not HTTP or private
+completion-engine contracts. Its installed API contains no native, OpenSSL, ICU,
+or libpq types. Private wire/authentication contracts shared by implementation
+files stay under `postgres/src/`; they are not installed.
+
+PostgreSQL owns a stable connection implementation and serializes protocol
+operations. SQL failures drain through ReadyForQuery before allowing reuse;
+incomplete transport/protocol operations close the session rather than guessing
+where the wire stream resumes. Independent cancellation snapshots own their
+credentials and server cancellation key. BlockingConnection drives the same
+engine on an owned caller-thread Context, without a helper thread. Feature and
+qualification status lives in the [PostgreSQL parity checklist](postgres-parity.md).
 
 ## Data and execution
 

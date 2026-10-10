@@ -1,0 +1,13 @@
+#pragma once
+
+#include <string_view>
+
+namespace weave::pg {
+
+namespace {
+
+constexpr std::string_view configured_system_service_directory = "@weave_postgres_sysconf_literal@";
+
+} // namespace
+
+} // namespace weave::pg

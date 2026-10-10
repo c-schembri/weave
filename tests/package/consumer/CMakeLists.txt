@@ -18,7 +18,11 @@ if(NOT "tls" IN_LIST WEAVE_EXPECTED_MODULES AND (TARGET OpenSSL::SSL OR TARGET O
   message(FATAL_ERROR "An unrequested TLS dependency leaked into the consumer")
 endif()
 
-foreach(component IN ITEMS core io runtime tcp sync tls)
+if(NOT "postgres" IN_LIST WEAVE_EXPECTED_MODULES AND (TARGET ICU::uc OR TARGET ICU::i18n))
+  message(FATAL_ERROR "An unrequested PostgreSQL dependency leaked into the consumer")
+endif()
+
+foreach(component IN ITEMS core io runtime tcp local sync tls postgres)
   if(component IN_LIST WEAVE_EXPECTED_MODULES)
     if(NOT TARGET weave::${component})
       message(FATAL_ERROR "Missing transitive target weave::${component}")

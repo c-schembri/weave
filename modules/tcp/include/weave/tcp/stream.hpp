@@ -2,6 +2,7 @@
 
 #include <weave/io.hpp>
 #include <weave/address.hpp>
+#include <chrono>
 #include <span>
 #include <string>
 #include <vector>
@@ -10,6 +11,13 @@ namespace weave {
 
 class TcpStream;
 class TcpListener;
+
+struct TcpKeepAliveOptions {
+  bool enabled = true;
+  std::chrono::seconds idle{0};
+  std::chrono::seconds interval{0};
+  u32 probes = 0;
+};
 
 namespace tcp {
 
@@ -39,6 +47,13 @@ public:
   Result<void> cancel();
   Result<void> close();
   Result<void> no_delay(bool enabled = true);
+  // Zero tuning values leave the current native settings unchanged.
+  // Native changes are not atomic: earlier changes can survive a later failure.
+  Result<void> keep_alive(TcpKeepAliveOptions options = {});
+  Result<TcpKeepAliveOptions> keep_alive_options() const;
+  // TCP_USER_TIMEOUT is supported on Linux, not Windows.
+  Result<void> user_timeout(std::chrono::milliseconds timeout);
+  Result<std::chrono::milliseconds> user_timeout() const;
   Result<Endpoint> local_endpoint() const;
   Result<Endpoint> peer_endpoint() const;
 

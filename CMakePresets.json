@@ -8,7 +8,7 @@
       "architecture": "x64",
       "binaryDir": "${sourceDir}/build/windows",
       "cacheVariables": {
-        "WEAVE_MODULES": "core;io;runtime;tcp;sync",
+        "WEAVE_MODULES": "core;io;runtime;tcp;local;sync",
         "WEAVE_BUILD_TESTS": "ON",
         "WEAVE_BUILD_BENCHMARKS": "ON",
         "WEAVE_BUILD_EXAMPLES": "ON"
@@ -31,8 +31,24 @@
       "inherits": "windows-ci",
       "binaryDir": "${sourceDir}/build/windows-tls",
       "cacheVariables": {
-        "WEAVE_MODULES": "core;io;runtime;tcp;sync;tls"
+        "WEAVE_MODULES": "core;io;runtime;tcp;local;sync;tls"
       }
+    },
+    {
+      "name": "windows-postgres",
+      "displayName": "Windows correctness tests including TLS and native PostgreSQL",
+      "inherits": "windows-tls",
+      "binaryDir": "${sourceDir}/build/windows-postgres",
+      "cacheVariables": {
+        "WEAVE_MODULES": "core;io;runtime;tcp;local;sync;tls;postgres",
+        "WEAVE_POSTGRES_BENCHMARKS": "OFF"
+      }
+    },
+    {
+      "name": "asan-postgres",
+      "inherits": "windows-postgres",
+      "binaryDir": "${sourceDir}/build/asan-postgres",
+      "cacheVariables": {"WEAVE_ENABLE_ASAN": "ON"}
     },
     {
       "name": "asan-tls",
@@ -49,7 +65,7 @@
       "binaryDir": "${sourceDir}/build/linux-debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "WEAVE_MODULES": "core;io;runtime;tcp;sync;tls",
+        "WEAVE_MODULES": "core;io;runtime;tcp;local;sync;tls",
         "WEAVE_BUILD_TESTS": "ON",
         "WEAVE_BUILD_BENCHMARKS": "OFF",
         "WEAVE_BUILD_EXAMPLES": "ON"
@@ -102,6 +118,9 @@
     {"name": "ci-release", "configurePreset": "windows-ci", "configuration": "Release"},
     {"name": "tls-debug", "configurePreset": "windows-tls", "configuration": "Debug"},
     {"name": "tls-release", "configurePreset": "windows-tls", "configuration": "Release"},
+    {"name": "postgres-debug", "configurePreset": "windows-postgres", "configuration": "Debug"},
+    {"name": "postgres-release", "configurePreset": "windows-postgres", "configuration": "Release"},
+    {"name": "asan-postgres", "configurePreset": "asan-postgres", "configuration": "Release"},
     {"name": "asan-tls", "configurePreset": "asan-tls", "configuration": "Release"},
     {"name": "runtime-bench", "configurePreset": "windows-runtime-bench", "configuration": "Release"},
     {"name": "asan", "configurePreset": "asan", "configuration": "Release"}
@@ -116,6 +135,9 @@
     {"name": "ci-release", "configurePreset": "windows-ci", "configuration": "Release", "output": {"outputOnFailure": true}, "filter": {"exclude": {"label": "benchmark"}}},
     {"name": "tls-debug", "configurePreset": "windows-tls", "configuration": "Debug", "output": {"outputOnFailure": true}},
     {"name": "tls-release", "configurePreset": "windows-tls", "configuration": "Release", "output": {"outputOnFailure": true}},
+    {"name": "postgres-debug", "configurePreset": "windows-postgres", "configuration": "Debug", "output": {"outputOnFailure": true}},
+    {"name": "postgres-release", "configurePreset": "windows-postgres", "configuration": "Release", "output": {"outputOnFailure": true}},
+    {"name": "asan-postgres", "configurePreset": "asan-postgres", "configuration": "Release", "output": {"outputOnFailure": true}},
     {"name": "asan-tls", "configurePreset": "asan-tls", "configuration": "Release", "output": {"outputOnFailure": true}},
     {"name": "asan", "configurePreset": "asan", "configuration": "Release", "output": {"outputOnFailure": true}}
   ]

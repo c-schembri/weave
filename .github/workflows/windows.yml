@@ -24,17 +24,17 @@ jobs:
       matrix:
         include:
           - configuration: Debug
-            configure: windows-tls
-            preset: tls-debug
-            directory: build/windows-tls
+            configure: windows-postgres
+            preset: postgres-debug
+            directory: build/windows-postgres
           - configuration: Release
-            configure: windows-tls
-            preset: tls-release
-            directory: build/windows-tls
+            configure: windows-postgres
+            preset: postgres-release
+            directory: build/windows-postgres
           - configuration: AddressSanitizer
-            configure: asan-tls
-            preset: asan-tls
-            directory: build/asan-tls
+            configure: asan-postgres
+            preset: asan-postgres
+            directory: build/asan-postgres
     defaults:
       run:
         shell: cmd
@@ -53,28 +53,28 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: microsoft/vcpkg
-          ref: 83375d1ded4878305df9f5272f360f4f80ee0d83
+          ref: e182cb4dd2df2ab02f66a1aabd5f35bbdc9522c7
           path: build/vcpkg
           persist-credentials: false
 
-      - name: Cache OpenSSL binaries
+      - name: Cache TLS and PostgreSQL dependencies
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: build/vcpkg/binary-cache
-          key: openssl-windows-2022-x64-83375d1ded4878305df9f5272f360f4f80ee0d83-v1
+          key: openssl-icu-windows-2022-x64-e182cb4dd2df2ab02f66a1aabd5f35bbdc9522c7-v1
 
       - name: Bootstrap vcpkg
         run: call build\vcpkg\bootstrap-vcpkg.bat -disableMetrics
 
-      - name: Install optional TLS dependency
+      - name: Install optional TLS and PostgreSQL dependencies
         env:
           VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\build\vcpkg\binary-cache,readwrite
         run: |
           python -c "from pathlib import Path; Path('build/vcpkg/binary-cache').mkdir(parents=True, exist_ok=True)"
-          build\vcpkg\vcpkg.exe install openssl:x64-windows --disable-metrics
+          build\vcpkg\vcpkg.exe install openssl:x64-windows icu:x64-windows --disable-metrics
 
       - name: Configure without benchmarks
-        run: cmake --preset ${{ matrix.configure }} -DWEAVE_BUILD_BENCHMARKS=OFF -DOPENSSL_ROOT_DIR="%GITHUB_WORKSPACE%/build/vcpkg/installed/x64-windows"
+        run: cmake --preset ${{ matrix.configure }} -DWEAVE_BUILD_BENCHMARKS=OFF -DWEAVE_POSTGRES_BENCHMARKS=OFF -DOPENSSL_ROOT_DIR="%GITHUB_WORKSPACE%/build/vcpkg/installed/x64-windows" -DICU_ROOT="%GITHUB_WORKSPACE%/build/vcpkg/installed/x64-windows"
 
       - name: Build tests and examples
         run: cmake --build --preset ${{ matrix.preset }} --parallel 4

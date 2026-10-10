@@ -7,7 +7,7 @@ targets supply their C++23 requirement. Python 3.11+ is needed only for tests
 and developer automation, without pip packages. Rust is needed only for the
 optional Tokio comparison. Linux additionally requires glibc for async DNS.
 Library-only builds download no external dependencies;
-selecting TLS requires a separately installed OpenSSL 3 package.
+selecting TLS requires a separately installed, security-patched OpenSSL 3.5+ package.
 
 ## Vendored
 
@@ -20,7 +20,10 @@ target_link_libraries(my_app PRIVATE weave::tcp)
 Select `"tcp;runtime"` and link `weave::runtime` too when using worker threads.
 Required components are selected automatically: TCP, Sync and Runtime depend on
 IO; TLS depends on TCP and Sync; IO depends on Core. TCP and Runtime do not depend
-on each other. Only selecting TLS discovers OpenSSL. [TLS build options](tls.md).
+on each other. PostgreSQL depends on TLS and privately uses OpenSSL Crypto and
+ICU for authentication. OpenSSL is discovered only when TLS is selected directly
+or through PostgreSQL; ICU is discovered only for PostgreSQL.
+[TLS build options](tls.md) / [PostgreSQL build options](postgres.md).
 
 ## Installed
 
@@ -47,7 +50,7 @@ no native OS header dependency.
 | --- | --- | --- |
 | `windows-ci` | `ci-debug`, `ci-release` | Correctness tests and examples; no benchmarks |
 | `asan` | `asan` | Release AddressSanitizer tests/examples; no benchmarks |
-| `windows-tls` | `tls-debug`, `tls-release` | All correctness tests/examples including TLS; requires OpenSSL 3 |
+| `windows-tls` | `tls-debug`, `tls-release` | All correctness tests/examples including TLS; requires OpenSSL 3.5+ |
 | `asan-tls` | `asan-tls` | All correctness tests/examples including TLS under AddressSanitizer |
 | `windows-runtime-bench` | `runtime-bench` (build only) | Only native Weave/Asio runtime servers and common client |
 | `windows` | `debug`, `release` | Full tests, examples, comparisons and benchmark smokes |

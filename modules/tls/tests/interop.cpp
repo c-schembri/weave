@@ -7,10 +7,12 @@
 
 using namespace std::chrono_literals;
 
-static weave::Task<void> echo(weave::TcpListener &listener, const weave::TlsContext &credentials)
+static weave::Task<void> echo(weave::TcpListener &listener, const weave::TlsContext &credentials, bool mutual)
 {
   auto transport = co_await listener.accept();
   auto peer = co_await weave::tls::server(std::move(transport), credentials);
+  if (mutual && !peer.peer_identity())
+    co_await weave::fail(std::errc::permission_denied);
   std::array<std::byte, 4096> buffer;
 
   while (auto received = co_await peer.read(buffer))
@@ -38,22 +40,28 @@ int main(int argc, char **argv)
     return 2;
 
   fixture::Certificates certificates;
+  const std::string_view mode{argv[1]};
+  const bool mutual = mode.starts_with("mtls-");
   const auto version = std::string_view{argv[2]} == "12" ? weave::TlsVersion::tls12 : weave::TlsVersion::tls13;
   auto ctx = weave::Context::create();
   if (!ctx)
     return weave::report_error(ctx.error());
 
   std::printf("%s\n%s\n%s\n", certificates.ca.c_str(), certificates.leaf.c_str(), certificates.private_key.c_str());
+  if (mutual)
+    std::printf("%s\n%s\n", certificates.client.c_str(), certificates.client_key.c_str());
   std::fflush(stdout);
 
   weave::Result<void> result;
-  if (std::string_view{argv[1]} == "server") {
+  if (mode == "server" || mode == "mtls-server") {
     auto tls = weave::TlsContext::server(
       {.certificate_file = certificates.leaf,
         .private_key_file = certificates.private_key,
         .alpn = {"echo"},
         .min_version = version,
-        .max_version = version});
+        .max_version = version,
+        .client_auth = mutual ? weave::TlsClientAuth::required : weave::TlsClientAuth::none,
+        .ca_file = mutual ? certificates.ca : ""});
     if (!tls)
       return weave::report_error(tls.error());
 
@@ -63,10 +71,15 @@ int main(int argc, char **argv)
 
     std::printf("%u\n", static_cast<unsigned>(listener->local_port()));
     std::fflush(stdout);
-    result = ctx->run(weave::timeout(10s, echo(*listener, *tls)));
+    result = ctx->run(weave::timeout(10s, echo(*listener, *tls, mutual)));
   } else {
     auto tls = weave::TlsContext::client(
-      {.ca_file = certificates.ca, .alpn = {"echo"}, .min_version = version, .max_version = version});
+      {.ca_file = certificates.ca,
+        .alpn = {"echo"},
+        .min_version = version,
+        .max_version = version,
+        .certificate_file = mutual ? certificates.client : "",
+        .private_key_file = mutual ? certificates.client_key : ""});
     if (!tls)
       return weave::report_error(tls.error());
 

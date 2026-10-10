@@ -34,6 +34,40 @@ until listener setup finishes.
 Numeric IPv6 and owned `Endpoint` overloads are supported. See
 [addresses and DNS](addresses.md) for dual-stack listening and endpoint queries.
 
+## Socket Controls
+
+`no_delay`, `keep_alive`, `keep_alive_options`, `user_timeout`, endpoint queries,
+`shutdown_send`, `cancel` and `close` are synchronous Results, never Tasks.
+They retain the stream's existing Context/thread contract.
+
+```cpp
+auto status = client.keep_alive({
+  .idle = std::chrono::seconds{60},
+  .interval = std::chrono::seconds{5},
+  .probes = 3,
+});
+if (!status)
+  co_await weave::fail(status.error());
+
+auto settings = client.keep_alive_options();
+```
+
+TCP streams retain OS keepalive defaults until explicitly configured.
+`keep_alive()` enables it; `{.enabled = false}` disables it without applying
+tuning. Zero tuning values preserve existing native settings, not reset them.
+Negative durations and values beyond a signed 32-bit integer are rejected
+before mutation, even when disabled. Further native limits return native errors.
+Configuration is not transactional: earlier native changes may remain after a
+later option fails. Readback reports the effective settings even when disabled.
+Windows idle/interval tuning requires Windows 10 1709+, probe-count tuning 1703+;
+older systems return native errors instead of silently ignoring requested values.
+
+`client.user_timeout(milliseconds)` and `client.user_timeout()` set/read Linux
+TCP_USER_TIMEOUT. Zero restores its OS-default behavior. It limits outstanding
+TCP data, not SQL execution time or healthy idle time. Windows returns
+`operation_not_supported`, including for a zero setter; its different TCP_MAXRT
+option is deliberately not substituted. No new timer or worker thread is created.
+
 ## Buffered Data Handlers
 
 Include `<weave/tcp/on_data.hpp>` as well, or use `<weave/tcp.hpp>`:

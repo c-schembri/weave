@@ -34,9 +34,14 @@ async def check(executable, mode, version):
 
     try:
         ca, certificate, key = await line(process), await line(process), await line(process)
-        if mode == "server":
+        mutual = mode.startswith("mtls-")
+        if mutual:
+            client_certificate, client_key = await line(process), await line(process)
+        if mode in ("server", "mtls-server"):
             tls = context(ssl.PROTOCOL_TLS_CLIENT, version)
             tls.load_verify_locations(cafile=ca)
+            if mutual:
+                tls.load_cert_chain(client_certificate, client_key)
             port = int(await line(process))
             reader, writer = await asyncio.wait_for(
                 asyncio.open_connection("127.0.0.1", port, ssl=tls, server_hostname="localhost"), 10)
@@ -55,6 +60,9 @@ async def check(executable, mode, version):
         else:
             tls = context(ssl.PROTOCOL_TLS_SERVER, version)
             tls.load_cert_chain(certificate, key)
+            if mutual:
+                tls.verify_mode = ssl.CERT_REQUIRED
+                tls.load_verify_locations(cafile=ca)
 
             async def echo(reader, writer):
                 writers.append(writer)
@@ -167,7 +175,7 @@ async def main(executable, example):
         return
 
     for version in (ssl.TLSVersion.TLSv1_2, ssl.TLSVersion.TLSv1_3):
-        for mode in ("server", "client"):
+        for mode in ("server", "client", "mtls-server", "mtls-client"):
             await check(executable, mode, version)
 
 

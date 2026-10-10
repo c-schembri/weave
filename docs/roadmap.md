@@ -75,14 +75,16 @@ and both schedulers/layouts with four workers. [Contracts](synchronization.md).
 
 ## 4. Composable streams and TLS
 
-Implemented: Core stream concepts/helpers and optional OpenSSL 3 TLS adapters.
+Implemented: Core stream concepts/helpers and optional OpenSSL 3.5+ TLS adapters.
 TLS supports verified client/server handshakes, TLS 1.2/1.3, ALPN, full-duplex I/O,
 and explicit graceful shutdown. TLS dependencies do not enter TCP-only consumers.
 [Stream contracts](streams.md) / [TLS contracts and limitations](tls.md).
 
-This is an initial experimental implementation, not a security audit or a complete
-production TLS stack. Revocation integration, mTLS, session-cache controls, and
-long-running hostile-peer stress remain future hardening work.
+TLS also supports mTLS, CRLs, stapled OCSP, explicit bounded session controls,
+credential-snapshot rotation, handshake deadlines and channel binding/exporters.
+[Release gates and deployment responsibilities](tls-release.md) define the
+supported profile. Automated correctness evidence is not a security audit;
+provider-specific and deployment-specific validation still matters.
 
 ## 5. Linux io_uring
 
@@ -94,3 +96,34 @@ Linux Debug, Release and ASan validation are available through CMake presets.
 Shared-ring collectors, Linux correctness CI and platform-matched measurements
 remain follow-up work before cross-platform performance claims. No epoll fallback
 or macOS backend is planned.
+
+## 6. Native PostgreSQL
+
+The optional PostgreSQL module uses Weave transports and its native wire protocol,
+not libpq. SCRAM/channel binding, prepared queries, duplex batching, independent
+pipeline ownership/Flush/Sync, COPY IN/OUT and raw COPY BOTH/replication transport,
+streaming rows, portals, cancellation, large objects, typed multi-host selection
+and reset are implemented. Connection strings support an explicit, side-effect-free
+URI/keyword subset, with explicit environment/service/password-file loading.
+A blocking facade drives the same Tasks; libpq is restricted
+to optional comparisons.
+[Public contracts](postgres.md) / [Full parity scope](postgres-parity.md).
+[Function-by-function libpq audit](postgres-api-audit.md) records capability
+coverage separately from execution/ownership differences.
+
+The fixed TLS/PostgreSQL batch is closed; [supported scope and deployment
+boundaries](postgres-release.md) define the checkpoint. GSS/SSPI, OAuth, pipeline
+row streaming and encoding support now have explicit implementations and
+qualification records. Replication exposes protocol messages, not an application
+replication manager. Domain/hardware qualification, independent security review
+and literal libpq behavior remain outside the implemented scope.
+
+The next transport foundation is implemented separately as [Local sockets](local.md):
+filesystem streams on Windows/Linux, Linux abstract streams and kernel peer IDs,
+sharing IO's existing socket completion machinery with TCP. Four-worker scheduling,
+cancellation and component-isolation gates passed on both platforms. PostgreSQL
+socket-directory selection and same-address cancellation now use that transport,
+with explicit plaintext policy and pre-startup Linux UID checks. Explicit Linux
+`Options::load` now resolves username `requirepeer` into a canonical UID snapshot;
+it does not hide NSS lookup inside asynchronous connection setup. Windows peer
+credentials and literal libpq connection-time name semantics remain unsupported.
