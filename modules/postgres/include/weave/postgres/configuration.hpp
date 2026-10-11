@@ -8,6 +8,7 @@
 
 namespace weave::pg {
 
+/// Whether a connection keyword is parsed directly, requires explicit loading, or is unsupported/unknown.
 enum class OptionSupport {
   parse,
   load,
@@ -15,6 +16,7 @@ enum class OptionSupport {
   unrecognized
 };
 
+/// Static keyword/default metadata. Views have static storage; secret marks sensitive option values.
 struct OptionDescriptor {
   std::string_view keyword;
   std::string_view environment;
@@ -24,9 +26,12 @@ struct OptionDescriptor {
   std::string_view constraints;
 };
 
-// Static Weave defaults, not environment/service-resolved values or a live session.
+/// Borrow static Weave option metadata for the program lifetime; no ambient configuration reads.
+/// Defaults are not environment/service-resolved values or negotiated session settings.
 std::span<const OptionDescriptor> option_schema() noexcept;
 
+/// Owned explicit source-discovery policy for Options::load/defaults, not ordinary parse/connect.
+/// libpq_compatibility opts into conventional discovery and weaker libpq TLS defaults.
 struct ConfigSources {
   bool environment = true;
   bool user_files = true;
@@ -41,6 +46,7 @@ struct ConfigSources {
   bool libpq_compatibility = false;
 };
 
+/// Owned source selection provenance; a selected path does not prove it was opened or supplied credentials.
 struct ConfigurationOrigin {
   ConfigSources sources;
   std::optional<std::string> service;

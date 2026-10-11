@@ -1,5 +1,8 @@
 #if defined(WEAVE_USE_POSTGRES)
 #include <weave/postgres.hpp>
+#elif defined(WEAVE_USE_DATABASE)
+#include <weave/database.hpp>
+#include <weave/database/detail/pool_inventory.hpp>
 #elif defined(WEAVE_USE_TLS)
 #include <weave/tls.hpp>
 #elif defined(WEAVE_USE_SYNC)
@@ -29,6 +32,27 @@
 #include <array>
 #include <cstdio>
 #include <cstdlib>
+
+#if defined(WEAVE_USE_DATABASE)
+struct DatabaseRecord {
+  int id;
+};
+
+struct NativeField {
+  template <class T>
+  weave::Result<T> as() const
+  {
+    return T{42};
+  }
+};
+
+struct NativeRow {
+  NativeField operator[](std::string_view) const
+  {
+    return {};
+  }
+};
+#endif
 
 #if defined(WEAVE_USE_TLS) || defined(WEAVE_USE_POSTGRES)
 weave::Result<weave::TlsInfo> tls_metadata(const weave::TlsStream<weave::TcpStream> &stream)
@@ -583,6 +607,15 @@ int main()
 
   auto error = weave::pg::sql_error("23505");
   return weave::pg::sqlstate(error) == "23505" ? 0 : 3;
+#elif defined(WEAVE_USE_DATABASE)
+  NativeRow row;
+  auto record = weave::db::decode<DatabaseRecord>(row);
+  weave::db::detail::PoolInventory<int> inventory{1};
+  inventory.add_idle(std::make_unique<int>(42));
+  auto retired = inventory.retire_idle();
+  if (retired.size() != 1 || *retired.front() != 42 || !inventory.stats().closed)
+    return 1;
+  return record && record->id == 42 ? 0 : 1;
 #elif defined(WEAVE_USE_LOCAL)
   auto ctx = weave::Context::create();
   if (!ctx)

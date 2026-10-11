@@ -21,7 +21,7 @@ def source_fingerprint():
     files = [root / "CMakeLists.txt", root / "cmake" / "WeaveModule.cmake"]
     files.append(root / "test_support" / "tls_certificates.hpp")
     files.append(root / "test_support" / "benchmark_affinity.hpp")
-    for module in ("core", "io", "runtime", "tcp", "sync", "tls", "postgres"):
+    for module in ("core", "database", "io", "runtime", "tcp", "sync", "tls", "postgres"):
         files.extend(path for path in (root / "modules" / module).rglob("*")
                      if path.is_file() and path.suffix in (".cpp", ".hpp", ".txt", ".py"))
     for path in sorted(files, key=lambda value: value.relative_to(root).as_posix()):

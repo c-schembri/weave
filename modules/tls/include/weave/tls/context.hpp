@@ -13,17 +13,20 @@
 
 namespace weave {
 
+/// Supported protocol versions; older TLS versions and early data are not offered.
 enum class TlsVersion {
   tls12,
   tls13
 };
 
+/// Client trust policy: none disables authentication, certificate checks trust, hostname also checks identity.
 enum class TlsVerification {
   none,
   certificate,
   hostname
 };
 
+/// TLS-specific failures, distinct from transport/native error categories.
 enum class TlsError {
   protocol = 1,
   certificate_verification,
@@ -36,27 +39,31 @@ enum class TlsError {
   client_certificate_required
 };
 
+/// Convert a TLS failure to Weave's standard error-code channel.
 Error make_error_code(TlsError error) noexcept;
 
+/// Server mTLS policy. optional/required verification needs explicitly configured client trust.
 enum class TlsClientAuth {
   none,
   optional,
   required
 };
 
-// Client identity use, separate from the server's client-authentication requirement.
+/// Per-handshake client identity use, separate from the server's client-authentication requirement.
 enum class TlsCertificateMode {
   disable,
   allow,
   require
 };
 
+/// CRL enforcement for the peer leaf or full chain; configured revocation data must be trusted.
 enum class TlsRevocation {
   none,
   leaf,
   chain
 };
 
+/// Identity key input format; store uses an already configured OpenSSL provider, not an installed engine.
 enum class TlsPrivateKeyFormat {
   pem,
   der,
@@ -64,18 +71,21 @@ enum class TlsPrivateKeyFormat {
   store
 };
 
+/// Client stapled-OCSP policy. required rejects absent evidence; enforcement is incompatible with resumption.
 enum class TlsOcsp {
   none,
   if_present,
   required
 };
 
+/// Opt-in server resumption mode; disabled is the default.
 enum class TlsSessionMode {
   disabled,
   stateful,
   tickets
 };
 
+/// Logical TLS buffer/certificate limits, not a bound on total OpenSSL or process allocations.
 struct TlsLimits {
   std::size_t buffered_input = 256 * 1024;
   std::size_t buffered_output = 256 * 1024;
@@ -83,6 +93,7 @@ struct TlsLimits {
   int verification_depth = 16;
 };
 
+/// Owned OpenSSL cipher/group/signature policy strings; empty strings retain library defaults.
 struct TlsCipherPolicy {
   std::string tls12;
   std::string tls13;
@@ -91,6 +102,7 @@ struct TlsCipherPolicy {
   int security_level = 2;
 };
 
+/// Server session cache/ticket limits. Clearing cache does not revoke stateless tickets.
 struct TlsSessionOptions {
   TlsSessionMode mode = TlsSessionMode::disabled;
   std::size_t capacity = 1024;
@@ -98,11 +110,13 @@ struct TlsSessionOptions {
   std::size_t tickets = 2;
 };
 
+/// Credential-context handshake and resumption counters, returned as a value snapshot.
 struct TlsSessionStats {
   u64 handshakes = 0;
   u64 resumed = 0;
 };
 
+/// Owning authenticated peer identity, including certificate bytes and its SHA-256 fingerprint.
 struct TlsPeerIdentity {
   std::string subject;
   std::string issuer;
@@ -110,6 +124,7 @@ struct TlsPeerIdentity {
   std::vector<std::byte> certificate;
 };
 
+/// Owning negotiated-session snapshot. Encryption alone does not imply certificate/hostname verification.
 struct TlsInfo {
   std::string library;
   TlsVersion version = TlsVersion::tls13;
@@ -123,6 +138,8 @@ struct TlsInfo {
   bool hostname_verified = false;
 };
 
+/// Owned per-handshake policy. Timeout must be positive and at most 24 hours.
+/// Disabling SNI changes routing disclosure only, never hostname verification.
 struct TlsHandshakeOptions {
   std::chrono::milliseconds timeout{30000};
   // Clients offer only this ALPN value; both roles reject a different or absent selection.
@@ -138,6 +155,7 @@ struct TlsPasswordAccess;
 
 } // namespace detail
 
+/// Shared immutable callback ownership for encrypted-key loading; captured references remain borrowed.
 class TlsPasswordProvider {
   friend struct detail::TlsPasswordAccess;
   struct Impl;
@@ -146,13 +164,17 @@ class TlsPasswordProvider {
   explicit TlsPasswordProvider(std::shared_ptr<const Impl> impl) noexcept;
 
 public:
-  // Invoked synchronously by the key loader. The path/URI is borrowed through invocation.
-  // Copies share the const callable; callers must synchronize mutable captured state.
+  /// Invoked synchronously by the key loader; path/URI is borrowed for this invocation only.
+  /// Copies share the const callable; callers synchronize mutable captured state.
   using Handler = std::move_only_function<Result<std::string>(std::string_view private_key_file) const noexcept>;
 
+  /// Consume a noexcept handler or return a validation/setup error. No stdin fallback on failure.
   [[nodiscard]] static Result<TlsPasswordProvider> create(Handler handler);
 };
 
+/// Owning client credential policy, loaded synchronously by TlsContext::client().
+/// Defaults verify trust and hostname; resumption and secret key logging require explicit opt-in.
+/// Passphrases are best-effort cleansed in owned storage, not in caller copies or allocator history.
 struct TlsClientOptions {
   std::string ca_file;
   std::vector<std::string> alpn;
@@ -180,6 +202,8 @@ struct TlsClientOptions {
   std::string key_log_file;
 };
 
+/// Owning server identity/trust/session policy, loaded synchronously by TlsContext::server().
+/// mTLS requires explicit client trust. Key logging writes traffic-decryption secrets.
 struct TlsServerOptions {
   std::string certificate_file;
   std::string private_key_file;
@@ -211,6 +235,8 @@ class TlsEngine;
 
 } // namespace detail
 
+/// Move-only, one-shot resumption credential bound to credentials, server name and handshake policy.
+/// Possession does not guarantee the peer accepts resumption; certificate checks still apply.
 class TlsSession {
   friend class detail::TlsEngine;
   std::shared_ptr<detail::TlsSessionState> state_;
@@ -224,10 +250,14 @@ public:
   TlsSession(const TlsSession &) = delete;
   TlsSession &operator=(TlsSession &&) noexcept = default;
 
+  /// Whether the local offer is unconsumed and unexpired at this instant.
   bool available() const noexcept;
+  /// Remaining locally capped lifetime; zero for an unavailable offer.
   std::chrono::seconds remaining() const noexcept;
 };
 
+/// Cheaply copyable immutable credential snapshot shared by streams and concurrent handshakes.
+/// This is TLS policy ownership, not an I/O execution Context.
 class TlsContext {
   friend class detail::TlsEngine;
   std::shared_ptr<detail::TlsCredentials> credentials_;
@@ -238,11 +268,17 @@ class TlsContext {
   }
 
 public:
+  /// Synchronously validate/load an owning policy: copy lvalues, move rvalues.
+  /// The returned snapshot retains credentials/providers, not references to options.
   static Result<TlsContext> client(TlsClientOptions options = {});
+  /// Synchronously load an owning server identity/policy, returning validation or credential errors.
   static Result<TlsContext> server(TlsServerOptions options);
 
+  /// Snapshot shared handshake/resumption counters without performing I/O.
   TlsSessionStats session_stats() const noexcept;
+  /// Configured client verification policy, not proof a particular peer was verified.
   TlsVerification verification() const noexcept;
+  /// Clear stateful session cache; does not revoke stateless tickets. Rotate credentials for revocation.
   Result<void> clear_sessions() const noexcept;
 };
 

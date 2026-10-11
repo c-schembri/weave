@@ -28,11 +28,12 @@ add_subdirectory(external/weave)
 target_link_libraries(my_app PRIVATE weave::tcp weave::runtime)
 ```
 
-Required dependencies are selected automatically. Core is header-only; other
-modules are static libraries. TCP does not require Runtime, and Runtime does not
-require TCP. TLS adds TCP/Sync/OpenSSL; PostgreSQL adds TLS, private local transport,
-OpenSSL Crypto and ICU. There is no all-features umbrella target or shared-library
-ABI/export support.
+Required dependencies are selected automatically. Core and Database are header-only;
+other modules are static libraries. Database depends only on Core. Its private async
+pool support uses IO/Sync without becoming an installed component. TCP does not
+require Runtime, and Runtime does not require TCP. TLS adds TCP/Sync/OpenSSL;
+PostgreSQL adds Database, TLS, private local transport, OpenSSL Crypto and ICU.
+There is no all-features umbrella target or shared-library ABI/export support.
 
 Library-only builds do not fetch test/comparison dependencies. Tests, examples
 and benchmarks are independent opt-ins, off by default:
@@ -55,7 +56,7 @@ find_package(weave CONFIG REQUIRED COMPONENTS tcp)
 target_link_libraries(my_app PRIVATE weave::tcp)
 ```
 
-Components are `core`, `io`, `runtime`, `tcp`, `local`, `sync`, `tls` and
+Components are `core`, `database`, `io`, `runtime`, `tcp`, `local`, `sync`, `tls` and
 `postgres`; each exports `weave::<component>`. Installed headers are self-contained
 and have no native OS header dependency.
 

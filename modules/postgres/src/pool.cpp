@@ -2,9 +2,9 @@
 #include <weave/semaphore.hpp>
 #include <weave/timer.hpp>
 #include <weave/io/detail/context_access.hpp>
+#include <weave/database/detail/pool_admission.hpp>
 #include "options.hpp"
 #include "pool_access.hpp"
-#include <mutex>
 
 namespace weave::pg {
 
@@ -21,30 +21,21 @@ struct PooledConnection::Entry {
   }
 };
 
-struct Pool::Impl {
+struct Pool::Impl : db::detail::PoolInventory<PooledConnection::Entry> {
   detail::OwnedOptions options;
   PoolOptions limits;
   Context &context;
   Semaphore capacity;
-  mutable std::mutex mutex;
-  std::vector<std::unique_ptr<PooledConnection::Entry>> idle;
-  PoolStats counters;
 
   Impl(detail::OwnedOptions configuration, PoolOptions policy, Context &owner)
-      : options(std::move(configuration)), limits(policy), context(owner), capacity(policy.max_connections)
+      : PoolInventory(policy.max_connections), options(std::move(configuration)), limits(policy), context(owner),
+        capacity(policy.max_connections)
   {
-    idle.reserve(limits.max_connections);
   }
 
   void stop() noexcept
   {
-    std::vector<std::unique_ptr<PooledConnection::Entry>> retired;
-    {
-      std::lock_guard lock{mutex};
-      counters.closed = true;
-      retired.swap(idle);
-      counters.discarded += retired.size();
-    }
+    auto retired = retire_idle();
 
     capacity.close();
     if (!retired.empty())
@@ -70,11 +61,7 @@ Task<Pool> Pool::create(Options options, PoolOptions limits)
 
 Task<Pool> Pool::create_impl(detail::OwnedOptions options, PoolOptions limits)
 {
-  const bool invalid_capacity = limits.max_connections == 0 || limits.max_connections > 65536 ||
-    limits.min_connections > limits.max_connections;
-  const bool invalid_timeouts = limits.acquire_timeout <= std::chrono::milliseconds{0} ||
-    limits.idle_timeout < std::chrono::milliseconds{0} || limits.max_lifetime < std::chrono::milliseconds{0};
-  if (invalid_capacity || invalid_timeouts)
+  if (!db::valid_pool_options(limits))
     co_await fail(std::errc::invalid_argument);
   if (options.value.replication != Replication::disabled)
     co_await fail(std::errc::operation_not_supported);
@@ -86,8 +73,7 @@ Task<Pool> Pool::create_impl(detail::OwnedOptions options, PoolOptions limits)
 
   for (std::size_t index = 0; index < limits.min_connections; ++index) {
     auto session = co_await connect(impl->options.value);
-    impl->idle.push_back(std::make_unique<PooledConnection::Entry>(std::move(session)));
-    ++impl->counters.created;
+    impl->add_idle(std::make_unique<PooledConnection::Entry>(std::move(session)));
   }
 
   co_return pool;
@@ -108,34 +94,10 @@ Task<PooledConnection> Pool::acquire_timed(std::shared_ptr<Impl> impl)
 
 Task<PooledConnection> Pool::acquire_impl(std::shared_ptr<Impl> impl)
 {
-  bool closed = false;
-  {
-    std::lock_guard lock{impl->mutex};
-    closed = impl->counters.closed;
-    if (!closed)
-      ++impl->counters.pending;
-  }
-  if (closed)
+  if (!impl->begin_acquire())
     co_await fail(Error::closed);
 
-  struct Admission {
-    Impl &pool;
-    std::unique_ptr<PooledConnection::Entry> entry;
-    std::optional<Semaphore::Permit> permit;
-
-    ~Admission()
-    {
-      {
-        std::lock_guard lock{pool.mutex};
-        --pool.counters.pending;
-        if (entry)
-          ++pool.counters.discarded;
-      }
-
-      entry.reset();
-      permit.reset();
-    }
-  } admission{*impl};
+  db::detail::PoolAdmission<PooledConnection::Entry> admission{*impl};
 
   weave::detail::ContextAccess::check_execution(impl->context);
   auto admitted = co_await as_result(impl->capacity.acquire());
@@ -146,15 +108,7 @@ Task<PooledConnection> Pool::acquire_impl(std::shared_ptr<Impl> impl)
   }
   admission.permit.emplace(std::move(*admitted));
 
-  {
-    std::lock_guard lock{impl->mutex};
-    closed = impl->counters.closed;
-    if (!closed && !impl->idle.empty()) {
-      admission.entry = std::move(impl->idle.back());
-      impl->idle.pop_back();
-    }
-  }
-  if (closed)
+  if (!impl->take_idle(admission.entry))
     co_await fail(Error::closed);
 
   auto &entry = admission.entry;
@@ -166,16 +120,14 @@ Task<PooledConnection> Pool::acquire_impl(std::shared_ptr<Impl> impl)
       now - entry->created >= impl->limits.max_lifetime;
     if (expired_idle || expired_session || !entry->connection.open()) {
       entry.reset();
-      std::lock_guard lock{impl->mutex};
-      ++impl->counters.discarded;
+      impl->discarded();
     }
   }
 
   if (!entry) {
     auto session = co_await connect(impl->options.value);
     entry = std::make_unique<PooledConnection::Entry>(std::move(session));
-    std::lock_guard lock{impl->mutex};
-    ++impl->counters.created;
+    impl->created();
   } else if (entry->dirty) {
     auto &session = entry->connection;
     const auto transaction = session.transaction();
@@ -189,13 +141,7 @@ Task<PooledConnection> Pool::acquire_impl(std::shared_ptr<Impl> impl)
   }
 
   co_await cancellation_point();
-  {
-    std::lock_guard lock{impl->mutex};
-    closed = impl->counters.closed;
-    if (!closed)
-      ++impl->counters.borrowed;
-  }
-  if (closed)
+  if (!impl->publish_borrow())
     co_await fail(Error::closed);
 
   entry->permit.emplace(std::move(*admission.permit));
@@ -211,10 +157,7 @@ void Pool::close() noexcept
 PoolStats Pool::stats() const noexcept
 {
   weave::detail::require(impl_ != nullptr);
-  std::lock_guard lock{impl_->mutex};
-  auto stats = impl_->counters;
-  stats.idle = impl_->idle.size();
-  return stats;
+  return impl_->stats();
 }
 
 PooledConnection::PooledConnection(std::unique_ptr<Entry> entry, std::shared_ptr<Pool::Impl> pool) noexcept
@@ -263,17 +206,10 @@ void PooledConnection::return_connection(bool discard) noexcept
   auto permit = std::move(entry->permit);
   entry->permit.reset();
 
-  {
-    std::lock_guard lock{pool->mutex};
-    --pool->counters.borrowed;
-    if (!discard && reusable && !pool->counters.closed) {
-      entry->dirty = true;
-      entry->returned = std::chrono::steady_clock::now();
-      pool->idle.push_back(std::move(entry));
-    } else {
-      ++pool->counters.discarded;
-    }
-  }
+  pool->return_entry(entry, !discard && reusable, [](Entry &returned) noexcept {
+    returned.dirty = true;
+    returned.returned = std::chrono::steady_clock::now();
+  });
 
   // Free retired sessions before handing their capacity to another acquirer.
   entry.reset();

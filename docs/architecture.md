@@ -30,11 +30,53 @@ core <- io <- runtime
           <- tcp <- tls <- postgres
           <- local       <- postgres (private transport)
           <- sync <- tls
+core <- database <- postgres
 ```
 
 PostgreSQL uses public transports, not IOCP/io_uring or scheduler internals.
 Its private protocol parsers, OpenSSL Crypto and ICU do not become public native
 types. libpq exists only in optional comparison targets. [Build components](build.md).
+
+### Database Foundation
+
+The foundation separates reusable database machinery from PostgreSQL, preserving
+its public API. MySQL is the next implementation; SQLite, Oracle and
+SQL Server are design constraints, not implemented drivers or a new feature backlog.
+
+- **`weave::database`:** Core-only arena/container storage, column lookup, fixed-array
+  selector binding, record mapping and synchronized pool inventory/options.
+  Drivers supply codecs and storage access; PostgreSQL OIDs,
+  binary layouts and command statuses do not become universal database types.
+- **Internal async pool support:** build-only failure-safe semaphore admission
+  guards in Database's private headers, using IO/Sync without adding those
+  dependencies to `weave::database`. Drivers use existing semaphore/timer operations
+  and supply connect, reset, health, retirement and execution-affinity policies. A synchronous
+  embedded driver need not acquire a Context or depend on networking.
+- **Vendor implementations:** protocol or embedded/native engine, authentication,
+  parameters, transaction/recovery semantics, cancellation and advanced features.
+  Keep dependencies selective; using one driver must not link another vendor's SDK.
+
+Common row access can look alike without erasing semantics. Retain exact values
+and vendor metadata; do not force decimals through double or all fields through
+text. Owning results, cursor-borrowed views and session-bound LOBs need distinct
+lifetime contracts. Cancellation is a request, not proof of rollback or safe reuse.
+
+Prefer compile-time policies over a mandatory virtual Connection or universal
+owning value container. Extract proven reuse, validate boundaries against real
+drivers, and keep protocol-specific tests. No ORM, SQL dialect rewriting,
+automatic query replay or speculative driver directories are part of this work.
+
+Shared mappings use `weave::db::RowTraits<T>` and `db::field`; PostgreSQL's existing
+`pg::RowTraits<T>` specializations still work and override a shared mapping.
+`db::decode<T>(row)` accepts an lvalue row adapter with named field selection and
+`Field::as<T>()`, returning `Result<T>` without requiring a Context. Vendor APIs
+remain the normal entry points, including PostgreSQL's `row.as<T>()` and cached
+`result.decoder<T>()`. Shared schema lookup/binding does not own row buffers or LOBs.
+The owning arena containers and driver-validation helpers live in installed `detail`
+headers, not a new universal result type. Reflection stays out of primitive headers.
+Pool inventory is also Core-only: a synchronous embedded pool can reuse its
+bookkeeping without acquiring a Context or linking async admission machinery.
+Async admission is not an installed header or a selectable package component.
 
 ## Visibility
 

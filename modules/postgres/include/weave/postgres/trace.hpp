@@ -7,16 +7,20 @@
 
 namespace weave::pg {
 
+/// Frontend means client-to-server; backend means server-to-client.
 enum class TraceDirection {
   frontend,
   backend
 };
 
+/// Metadata-only default or explicit sensitive application-payload tracing (SQL/data may be exposed).
 enum class TraceContent {
   metadata,
   application
 };
 
+/// Inline borrowed protocol event; retain copies explicitly if needed after the callback returns.
+/// Startup/authentication/backend-key bodies are withheld even in application tracing mode.
 struct TraceMessage {
   TraceDirection direction;
   // Zero denotes an untagged startup/SSL request; length includes the four-byte length field, not the tag.
@@ -28,8 +32,10 @@ struct TraceMessage {
   bool truncated = false;
 };
 
+/// Owned inline noexcept observer; its message and payload span are borrowed for one invocation.
 using TraceHandler = std::move_only_function<void(const TraceMessage &) noexcept>;
 
+/// Owned trace callback and bounded payload prefix policy; capture references must remain valid.
 struct Trace {
   TraceHandler handler;
   TraceContent content = TraceContent::metadata;

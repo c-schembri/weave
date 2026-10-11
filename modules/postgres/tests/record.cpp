@@ -23,6 +23,14 @@ struct Borrowed {
 
 struct Empty {};
 
+struct SharedMapping {
+  weave::i64 key = 0;
+};
+
+struct VendorOverride {
+  weave::i64 key = 0;
+};
+
 struct Alias {
   weave::i64 key = 0;
   std::string name;
@@ -42,6 +50,21 @@ struct Inherited : Base {
 };
 
 } // namespace record_test
+
+template <>
+struct weave::db::RowTraits<record_test::SharedMapping> {
+  static constexpr auto fields = std::tuple{weave::db::field("id", &record_test::SharedMapping::key)};
+};
+
+template <>
+struct weave::db::RowTraits<record_test::VendorOverride> {
+  static constexpr auto fields = std::tuple{weave::db::field("absent", &record_test::VendorOverride::key)};
+};
+
+template <>
+struct weave::pg::RowTraits<record_test::VendorOverride> {
+  static constexpr auto fields = std::tuple{pg::field("id", &record_test::VendorOverride::key)};
+};
 
 template <>
 struct weave::pg::RowTraits<record_test::Alias> {
@@ -247,4 +270,20 @@ TEST_CASE("PostgreSQL cached struct decoding shares immutable metadata across th
     worker.join();
   for (bool success : passed)
     CHECK(success);
+}
+
+TEST_CASE("PostgreSQL inherits portable mappings while preserving vendor overrides")
+{
+  auto result = sample();
+  auto shared = result.rows.front().as<record_test::SharedMapping>();
+  auto overridden = result.rows.front().as<record_test::VendorOverride>();
+  CHECK((shared && shared->key == 42));
+  CHECK((overridden && overridden->key == 42));
+
+  auto decoder = result.decoder<record_test::SharedMapping>();
+  REQUIRE(decoder);
+  if (!decoder)
+    return;
+  auto decoded = decoder->decode(result.rows.front());
+  CHECK((decoded && decoded->key == 42));
 }

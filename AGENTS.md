@@ -163,6 +163,14 @@
   expiry tests must allow capture across whole-second boundaries, then verify
   expiry without weakening the production lifetime policy.
 - Keep API documentation honest about unsupported features and fatal contracts.
+- Document supported public types and entry points consistently across every module
+  with concise /// comments at declarations, visible in editor hover. State what the
+  API does, then explain relevant execution/thread requirements, failure/cancellation
+  behavior and ownership: lvalue copies versus std::move transfers, retained
+  configuration, and borrowed input/output lifetimes. Distinguish lazy Task
+  completion/cancellation cleanup from synchronous call return. Owning a callable
+  does not extend its captured references. Check contracts against implementation;
+  avoid boilerplate on trivial members or treating one discussed API as the full scope.
 - Keep README focused on entry-point APIs. Maintain one canonical guide per topic
   under docs/, linked from docs/README.md; consolidate related contracts instead of
   adding another checkpoint/qualification diary. Keep security and ownership limits,
@@ -222,6 +230,26 @@
   links libpq except in optional comparisons. Match PostgreSQL benchmarks against
   libpq, rather than an unrelated Asio TCP workload. Keep its feature matrix honest.
   TCP must not require runtime, and runtime must not require TCP. Core has no OS dependencies.
+- The database foundation must accommodate PostgreSQL, MySQL, SQLite,
+  Oracle and SQL Server, not encode PostgreSQL as a universal database model.
+  Keep shared storage, row selection and record mapping dependent only on Core;
+  networking, execution and asynchronous pool machinery are separate opt-ins.
+  Database owns portable templates and pool inventory/options. Its build-only
+  weave_database_async target owns private async semaphore admission guards
+  and depends on Database/Sync, never a transport or vendor SDK. Do not export
+  this internal target or expose it as a selectable component. Embedded synchronous
+  pools may reuse inventory without linking async admission machinery.
+  Embedded drivers must not require sockets or a Context for synchronous work;
+  blocking engine/SDK calls must not run on I/O workers under an async disguise.
+  Share pool admission/lease mechanics, not driver reset, health, affinity or
+  cancellation policies. Keep wire/native types, authentication, diagnostics,
+  parameter binding, transactions and advanced capabilities vendor-specific.
+  Use compile-time codec/storage policies without mandatory virtual dispatch,
+  result materialization or per-row allocation. Preserve exact numeric values,
+  NULL/error distinctions, vendor metadata and driver-specific borrowed lifetimes;
+  schema ownership alone cannot retain a cursor buffer or session-bound LOB.
+  Preserve the PostgreSQL API during extraction. Do not introduce an ORM, SQL
+  dialect rewriting, automatic query retry or placeholder vendor modules.
 - Local streams use IO's shared private socket awaiters, retaining the same completion,
   cancellation and execution-affinity contracts as TCP. Keep filesystem paths and
   abstract names owned through lazy setup. Never unlink paths automatically or delete
@@ -724,6 +752,9 @@
   template implementation headers in the owning module's <name>/detail/ directory;
   those are installed but not supported public APIs. Compiled implementation
   headers stay under src/ and are never installed.
+- Keep VS Code's fallback public include paths in .vscode/settings.json aligned
+  with new modules. Preserve CMake's per-target compiler/define configuration;
+  never use a recursive workspace include path that also searches build/install copies.
 - Keep platform implementations under their owner's src/windows/ (and
   src/linux/). TCP uses IO's private backend contract; protocol modules should use
   transport APIs, not reach into IOCP internals or the runtime scheduler.

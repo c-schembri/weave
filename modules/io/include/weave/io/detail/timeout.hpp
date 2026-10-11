@@ -46,6 +46,9 @@ Task<void> timeout_timer(TimeoutState<T> &state, std::chrono::steady_clock::time
 
 namespace weave {
 
+/// Own a Task, race it against a steady-clock deadline, then cancel and drain the loser before returning.
+/// Deadline victory fails with timed_out; parent cancellation is forwarded and cleanup is shielded.
+/// Not a hard deadline for uncooperative work; borrowed resources must survive the entire drain.
 template <class T>
 Task<T> timeout_at(std::chrono::steady_clock::time_point deadline, Task<T> operation)
 {
@@ -74,6 +77,8 @@ Task<T> timeout_at(std::chrono::steady_clock::time_point deadline, Task<T> opera
     co_return std::move(**state.result);
 }
 
+/// Relative timeout starting when this lazy Task executes; owns the operation and drains it on timeout/cancellation.
+/// Like timeout_at(), can exceed the deadline while cooperative cleanup finishes; NaN duration is invalid_argument.
 template <class Rep, class Period, class T>
 Task<T> timeout(std::chrono::duration<Rep, Period> duration, Task<T> operation)
 {

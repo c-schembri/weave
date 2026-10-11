@@ -41,8 +41,6 @@ if(WEAVE_POSTGRES_LDAP)
   endif()
 endif()
 install(FILES src/vendor/yyjson/LICENSE DESTINATION "${CMAKE_INSTALL_DATADIR}/weave/licenses" RENAME yyjson-LICENSE)
-install(FILES include/weave/postgres/detail/vendor/pfr/LICENSE_1_0.txt
-  DESTINATION "${CMAKE_INSTALL_DATADIR}/weave/licenses" RENAME boost-pfr-LICENSE)
 install(FILES src/vendor/llhttp/LICENSE-MIT DESTINATION "${CMAKE_INSTALL_DATADIR}/weave/licenses" RENAME llhttp-LICENSE)
 install(FILES src/vendor/uriparser/COPYING.BSD-3-Clause DESTINATION "${CMAKE_INSTALL_DATADIR}/weave/licenses"
   RENAME uriparser-LICENSE)
@@ -87,7 +85,8 @@ target_include_directories(weave_postgres_uri_parser PRIVATE src/vendor/uriparse
 weave_postgres_parser(weave_postgres_uri_parser oauth_uri_prefix.h)
 target_include_directories(weave_postgres PRIVATE src/vendor/uriparser/include)
 
-target_link_libraries(weave_postgres PUBLIC weave::tls PRIVATE weave::local OpenSSL::Crypto ICU::uc ICU::i18n)
+target_link_libraries(weave_postgres PUBLIC weave::tls weave::database
+  PRIVATE $<BUILD_INTERFACE:weave_database_async> weave::local OpenSSL::Crypto ICU::uc ICU::i18n)
 if(WIN32)
   target_compile_definitions(weave_postgres PRIVATE _CRT_SECURE_NO_WARNINGS)
   target_sources(weave_postgres PRIVATE src/windows/gss.cpp src/windows/gss_pool.cpp src/windows/ldap.cpp)

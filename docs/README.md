@@ -21,7 +21,12 @@ Start with the [project README](../README.md), then open the guide for the featu
 | [Architecture](architecture.md) | Module layout and implementation boundaries |
 
 Examples: [TCP echo](../modules/tcp/examples/echo/README.md),
-[TLS echo](../modules/tls/examples/echo/README.md).
+[TLS echo](../modules/tls/examples/echo/README.md),
+[database columns](../modules/database/examples/columns.cpp),
+[database mapping](../modules/database/examples/mapping.cpp),
+[PostgreSQL simple struct](../modules/postgres/examples/queries/simple_struct.cpp),
+[PostgreSQL column aliases](../modules/postgres/examples/queries/shared_mapping.cpp),
+[PostgreSQL pooling](../modules/postgres/examples/connections/pool.cpp).
 
 Implementation diaries and superseded qualification notes remain in Git history,
 not in the user guide. Current guides describe supported contracts; tests are not

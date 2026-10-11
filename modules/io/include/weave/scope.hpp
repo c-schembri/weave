@@ -6,6 +6,8 @@
 
 namespace weave {
 
+/// Structured ownership of independent child tasks. Must join before destruction or borrowed data dies.
+/// Cancellation requests are cooperative; join closes submission and drains every accepted child.
 class TaskScope {
   CancelSource cancellation_;
   std::mutex mutex_;
@@ -45,7 +47,9 @@ class TaskScope {
       event.target = detail::current_context;
       event.executor = detail::current_executor;
       event.state = continuation.address();
-      event.invoke = [](void *address) noexcept { std::coroutine_handle<>::from_address(address).resume(); };
+      event.invoke = [](void *address) noexcept {
+        std::coroutine_handle<>::from_address(address).resume();
+      };
       std::lock_guard lock(scope.mutex_);
       scope.closing_ = true;
       detail::require(scope.waiting_ == nullptr);
@@ -81,17 +85,20 @@ public:
     detail::require(active_ == 0);
   }
 
+  /// Return the cancellation token shared by this scope's children.
   CancelToken token() const noexcept
   {
     return cancellation_.token();
   }
 
+  /// Request cancellation of children without waiting; join is still required.
   void cancel() noexcept
   {
     cancellation_.cancel();
   }
 
-  // Closing join is shielded: cancellation must never bypass draining children.
+  /// Close further submission and await all accepted children, returning their recorded failure if any.
+  /// Shielded from caller cancellation so cleanup cannot bypass draining; only one join waiter is allowed.
   Task<void> join()
   {
     auto task = drain(*this);
@@ -99,6 +106,8 @@ public:
     return task;
   }
 
+  /// Own a child factory through completion and submit using active execution; returns a join handle.
+  /// Requires an open scope. Children use this scope's token; referenced captures remain caller-owned.
   template <detail::SpawnFactory F>
   auto spawn(F &&factory) -> Result<JoinHandle<detail::SpawnResult<std::decay_t<F>>>>
   {
@@ -142,6 +151,7 @@ public:
     return task->handle();
   }
 
+  /// Transfer a child Task to this scope; scope.join() drains it even if its result handle is dropped.
   template <class T>
   Result<JoinHandle<T>> spawn(Task<T> task)
   {
@@ -184,6 +194,10 @@ struct RetainedTask {
 
 } // namespace detail
 
+/// Own and run a body receiving TaskScope&, forwarding parent cancellation and draining all children before returning.
+/// A failing body's frame is retained for cleanup, but successful body-local references must be joined before
+/// co_return. Callable ownership does not extend externally captured references; body failure takes precedence over
+/// child failure.
 template <class F>
   requires std::invocable<F &, TaskScope &> && std::same_as<std::invoke_result_t<F &, TaskScope &>, Task<void>>
 Task<void> scope(F body)

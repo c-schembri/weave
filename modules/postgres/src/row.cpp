@@ -1,5 +1,6 @@
 #include <weave/postgres/connection.hpp>
 #include "row_schema.hpp"
+#include <weave/database/selection.hpp>
 
 namespace weave::pg {
 
@@ -36,17 +37,13 @@ public:
 
 Result<std::size_t> find_column(const detail::RowSchema &schema, std::string_view name)
 {
-  std::optional<std::size_t> found;
-  for (std::size_t index = 0; index < schema.columns.size(); ++index) {
-    if (std::string_view{schema.columns[index].name} != name)
-      continue;
-    if (found)
-      return std::unexpected(make_error_code(DecodeError::ambiguous_column));
-    found = index;
+  auto selected = db::find_column(schema.columns, name);
+  if (!selected) {
+    const auto error = selected.error() == db::ColumnError::ambiguous ? DecodeError::ambiguous_column
+                                                                      : DecodeError::missing_column;
+    return std::unexpected(make_error_code(error));
   }
-  if (!found)
-    return std::unexpected(make_error_code(DecodeError::missing_column));
-  return *found;
+  return *selected;
 }
 
 u64 network_number(std::string_view bytes) noexcept

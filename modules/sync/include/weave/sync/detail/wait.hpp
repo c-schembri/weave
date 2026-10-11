@@ -6,10 +6,12 @@
 
 namespace weave {
 
+/// Synchronization-specific failure when a primitive no longer accepts new work.
 enum class SyncError {
   closed = 1
 };
 
+/// Convert a synchronization failure to the standard error-code channel.
 Error make_error_code(SyncError error) noexcept;
 
 namespace detail {

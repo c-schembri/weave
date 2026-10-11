@@ -14,8 +14,12 @@ class TlsStream;
 
 namespace tls {
 
+/// Own the transport, credentials, name and options before suspension; perform a timed client handshake.
+/// Name is used for configured identity verification; cancellation after TLS advances is terminal.
 template <CancellableStream S>
 Task<TlsStream<S>> client(S transport, TlsContext context, std::string server_name, TlsHandshakeOptions options = {});
+/// Client handshake with an owned one-shot session offer, bound to the same name/credential policy.
+/// Resumption is opt-in and peer acceptance is not guaranteed; invalid policy offers are rejected.
 template <CancellableStream S>
 Task<TlsStream<S>> client(
   S transport,
@@ -23,11 +27,15 @@ Task<TlsStream<S>> client(
   std::string server_name,
   TlsSession session,
   TlsHandshakeOptions options = {});
+/// Own transport, server credentials and options; complete a timed server handshake before returning.
 template <CancellableStream S>
 Task<TlsStream<S>> server(S transport, TlsContext context, TlsHandshakeOptions options = {});
 
 } // namespace tls
 
+/// Move-only TLS transport. One read and one write may run concurrently; shutdown is exclusive.
+/// Borrowed buffers and this stream must survive cancellation drain. TLS-progress failures can
+/// permanently poison the session; cancellation is not a reusable operation-level rollback.
 template <CancellableStream S>
 class TlsStream {
   static_assert(std::is_nothrow_move_constructible_v<S>);
@@ -180,17 +188,21 @@ class TlsStream {
   }
 
 public:
+  /// Move an idle stream; moving while an engine operation is active violates the contract.
   TlsStream(TlsStream &&other) noexcept : transport_(take_transport(other)), engine_(std::move(other.engine_))
   {
   }
 
   TlsStream(const TlsStream &) = delete;
 
+  /// Destroy an idle stream without a graceful TLS shutdown; drain active operations first.
   ~TlsStream()
   {
     detail::require(!engine_.active());
   }
 
+  /// Read decrypted bytes into borrowed storage; zero with a nonempty buffer means close_notify EOF.
+  /// Raw transport EOF without close_notify is truncation, not authenticated shutdown.
   Task<std::size_t> read(std::span<std::byte> buffer)
   {
     co_await cancellation_point();
@@ -202,6 +214,7 @@ public:
     co_return co_await read_some(buffer);
   }
 
+  /// Fill borrowed storage; premature authenticated EOF fails with connection_reset.
   Task<void> read_exactly(std::span<std::byte> buffer)
   {
     co_await cancellation_point();
@@ -224,6 +237,8 @@ public:
     }
   }
 
+  /// Encrypt and flush all borrowed bytes; retain storage through completion/cancellation.
+  /// TLS records do not define application message boundaries.
   Task<void> write_all(std::span<const std::byte> buffer)
   {
     co_await cancellation_point();
@@ -249,16 +264,19 @@ public:
     }
   }
 
+  /// Send/flush close_notify without waiting for the peer. Unlike TCP half-close this performs I/O.
   Task<void> shutdown_send()
   {
     return finish(false);
   }
 
+  /// Send close_notify and wait for the peer's reply; use timeout() if a bounded wait is needed.
   Task<void> shutdown()
   {
     return finish(true);
   }
 
+  /// Mark TLS terminally cancelled and request transport cancellation; does not join active tasks.
   Result<void> cancel() noexcept
   {
     engine_.fail(std::make_error_code(std::errc::operation_canceled));
@@ -266,6 +284,7 @@ public:
     return transport_.cancel();
   }
 
+  /// Abort synchronously without close_notify; active engine operations return operation_in_progress.
   Result<void> close() noexcept
   {
     if (engine_.active())
@@ -276,46 +295,56 @@ public:
     return transport_.close();
   }
 
+  /// Negotiated TLS version; synchronous, no network I/O.
   TlsVersion version() const noexcept
   {
     return engine_.version();
   }
 
+  /// Copy the selected ALPN label, or an empty string when none was negotiated.
   std::string negotiated_protocol() const
   {
     return engine_.alpn();
   }
 
+  /// Copy the negotiated cipher name.
   std::string cipher() const
   {
     return engine_.cipher();
   }
 
+  /// Whether this handshake actually resumed a session.
   bool session_reused() const noexcept
   {
     return engine_.session_reused();
   }
 
+  /// Export a one-shot client session if enabled and available; TLS 1.3 tickets may arrive later.
   Result<TlsSession> session() const
   {
     return engine_.session();
   }
 
+  /// Return an owning negotiated/verification snapshot, or a metadata extraction error.
   Result<TlsInfo> info() const
   {
     return engine_.info();
   }
 
+  /// Export an authenticated peer identity only; an unverified certificate is not an identity.
   Result<TlsPeerIdentity> peer_identity() const
   {
     return engine_.peer_identity();
   }
 
+  /// Export owned tls-server-end-point binding bytes for supported authenticated sessions.
   Result<std::vector<std::byte>> channel_binding() const
   {
     return engine_.channel_binding();
   }
 
+  /// Synchronously derive owned secret bytes, borrowing label/context only during this call.
+  /// An absent context differs from a present empty context; protect the returned key material.
   Result<std::vector<std::byte>> export_keying_material(
     std::string_view label,
     std::size_t size,

@@ -20,16 +20,19 @@ void dispatch_completion(Posted &message) noexcept;
 
 } // namespace detail
 
+/// Root placement policy: keep tasks on a worker, or allow independent roots to migrate.
 enum class Scheduler {
   worker_affine,
   work_stealing
 };
 
+/// Native completion layout. shared is Windows-only; scheduling policy is independent.
 enum class IoLayout {
   sharded,
   shared
 };
 
+/// Worker count, scheduling and native I/O configuration copied during create().
 struct RuntimeOptions {
   std::size_t workers = 0; // Zero uses hardware_concurrency(), or one if unknown.
   Scheduler scheduler = Scheduler::worker_affine;
@@ -37,6 +40,8 @@ struct RuntimeOptions {
   IoLayout io_layout = IoLayout::sharded;
 };
 
+/// Owns worker threads and their Contexts. Submission is thread-safe; lifetime is caller-owned.
+/// Keep this immovable object alive until tasks, sockets and other borrowers are destroyed.
 class Runtime {
   struct Impl;
 
@@ -46,52 +51,80 @@ class Runtime {
   };
 
 public:
+  /// Start workers or return a setup error after stopping any partially started workers.
+  /// The returned Result is immovable. workers == 0 selects logical hardware concurrency.
   [[nodiscard]] static Result<Runtime> create(RuntimeOptions options = {}) noexcept;
 
   // Only the factory can supply this key; public for Result's in-place construction.
   Runtime(CreateKey, std::unique_ptr<Impl> impl) noexcept;
+  /// Cooperatively cancel accepted work and join workers. Uncooperative work can delay destruction.
   ~Runtime();
   Runtime(const Runtime &) = delete;
   Runtime &operator=(const Runtime &) = delete;
+  /// Number of worker threads successfully created.
   std::size_t worker_count() const noexcept;
+  /// Configured task placement policy.
   Scheduler scheduler() const noexcept;
+  /// Configured native completion layout.
   IoLayout io_layout() const noexcept;
+  /// Whether cancelling stop/shutdown was requested; join() alone closes admission without setting this.
   bool stop_requested() const noexcept;
+  /// Thread-safe request to stop admission, request worker I/O cancellation and wake workers; no join.
   void request_stop() noexcept;
-  void join();     // Close submissions and drain accepted work without cancelling it.
-  void shutdown(); // Request I/O cancellation, then join all workers.
+  /// Close admission and block until accepted work finishes, without cancelling it.
+  /// Call outside running Contexts; an unbounded server task can prevent return.
+  void join();
+  /// Request cancellation and block until workers drain. Call outside running Contexts.
+  void shutdown();
 
-  // Schedule a root and wait on the caller, without closing submissions or joining independent tasks.
+  /// Consume a lazy task and block this caller for its Result, not for independently spawned work.
+  /// Must be called outside a running Context. Borrowed arguments must survive completion.
   template <class T>
   Result<T> run(Task<T> operation);
+  /// Own a factory, invoke it on a worker with Context& or no arguments, then wait for its Result.
+  /// The closure survives completion; references captured by it remain caller-owned.
   template <detail::SpawnFactory F>
   auto run(F &&factory) -> Result<detail::SpawnResult<std::decay_t<F>>>;
 
+  /// Thread-safe independent submission. Owns the task frame, not its referenced arguments.
+  /// Cancellation is explicit via options; dropping the handle neither cancels nor joins.
   template <class T>
   Result<JoinHandle<T>> spawn(Task<T> operation, SpawnOptions options = {});
+  /// Own the factory through completion and construct its task on a worker.
+  /// Rejection returns an error synchronously; captured references must outlive the task.
   template <detail::SpawnFactory F>
   auto spawn(F &&factory, SpawnOptions options = {}) -> Result<JoinHandle<detail::SpawnResult<std::decay_t<F>>>>;
+  /// Submit an independent task pinned to a worker index; invalid indices are rejected.
   template <class T>
   Result<JoinHandle<T>> spawn_on(std::size_t worker, Task<T> operation, SpawnOptions options = {});
+  /// Own a factory and pin its invocation and task to the selected worker.
   template <detail::SpawnFactory F>
   auto spawn_on(std::size_t worker, F &&factory, SpawnOptions options = {})
     -> Result<JoinHandle<detail::SpawnResult<std::decay_t<F>>>>;
 
-  // Rejection is reported on the caller; task errors on a worker. Omitted handlers discard errors.
+  /// Own unjoined work. The noexcept observer sees rejection on the caller or failure on a worker
+  /// after task cleanup. Without an observer, errors are discarded; references are not owned.
   template <class T, detail::ErrorObserver H = detail::IgnoreError>
   void detach(Task<T> operation, H on_error = {});
+  /// Detach an owned task with explicit cancellation; no join handle is created.
   template <class T, detail::ErrorObserver H = detail::IgnoreError>
   void detach(Task<T> operation, SpawnOptions options, H on_error = {});
+  /// Own a factory through its detached task; invoke it on a worker, not the submitter.
   template <detail::SpawnFactory F, detail::ErrorObserver H = detail::IgnoreError>
   void detach(F &&factory, H on_error = {});
+  /// Detach an owned factory with explicit cancellation and an optional noexcept observer.
   template <detail::SpawnFactory F, detail::ErrorObserver H = detail::IgnoreError>
   void detach(F &&factory, SpawnOptions options, H on_error = {});
+  /// Detach an owned task pinned to a worker; invalid indices reach the observer synchronously.
   template <class T, detail::ErrorObserver H = detail::IgnoreError>
   void detach_on(std::size_t worker, Task<T> operation, H on_error = {});
+  /// Pin detached work and use the supplied cancellation token; does not join.
   template <class T, detail::ErrorObserver H = detail::IgnoreError>
   void detach_on(std::size_t worker, Task<T> operation, SpawnOptions options, H on_error = {});
+  /// Own a factory and pin its invocation and detached task to the selected worker.
   template <detail::SpawnFactory F, detail::ErrorObserver H = detail::IgnoreError>
   void detach_on(std::size_t worker, F &&factory, H on_error = {});
+  /// Pin an owned detached factory with explicit cancellation and optional error observation.
   template <detail::SpawnFactory F, detail::ErrorObserver H = detail::IgnoreError>
   void detach_on(std::size_t worker, F &&factory, SpawnOptions options, H on_error = {});
 

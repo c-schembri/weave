@@ -3,6 +3,18 @@
   "cmake.configureOnOpen": true,
   "C_Cpp.default.cppStandard": "c++23",
   "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+  "C_Cpp.default.includePath": [
+    "${workspaceFolder}/modules/core/include",
+    "${workspaceFolder}/modules/database/include",
+    "${workspaceFolder}/modules/io/include",
+    "${workspaceFolder}/modules/runtime/include",
+    "${workspaceFolder}/modules/tcp/include",
+    "${workspaceFolder}/modules/local/include",
+    "${workspaceFolder}/modules/sync/include",
+    "${workspaceFolder}/modules/tls/include",
+    "${workspaceFolder}/modules/postgres/include"
+  ],
+  "C_Cpp.default.mergeConfigurations": true,
   "C_Cpp.formatting": "clangFormat",
   "C_Cpp.clang_format_style": "file",
   "[cpp]": {

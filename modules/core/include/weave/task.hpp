@@ -17,9 +17,14 @@
 
 namespace weave {
 
+/// Operational failure code; Weave does not throw exceptions to report these failures.
 using Error = std::error_code;
+/// Synchronous value-or-error result. Check before dereferencing; it is not awaitable.
 template <class T>
 using Result = std::expected<T, Error>;
+/// Move-only lazy computation yielding T or failing with Error. Awaiting consumes the Task;
+/// cooperating parent Tasks propagate failure automatically. Use as_result() for recovery.
+/// Reference parameters and coroutine-lambda captures are not owned merely by owning a Task.
 template <class T = void>
 class Task;
 
@@ -295,6 +300,8 @@ struct Promise : Return<T> {
 
 } // namespace detail
 
+/// Lazy, move-only T-or-error computation. Consuming awaits propagate errors unless wrapped in as_result().
+/// The frame owns value parameters, not referenced data or an originating coroutine-lambda closure.
 template <class T>
 class [[nodiscard]] Task {
   static_assert(std::is_void_v<T> || (!std::is_reference_v<T> && std::is_nothrow_move_constructible_v<T>));
@@ -314,13 +321,16 @@ class [[nodiscard]] Task {
   }
 
 public:
+  /// Success type, void for a computation without a value.
   using value_type = T;
+  /// Compiler coroutine protocol; not a public scheduling or manual-resumption interface.
   using promise_type = detail::Promise<T>;
   Task(Task &&) noexcept = default;
   Task(const Task &) = delete;
   Task &operator=(const Task &) = delete;
 
-  // Observe failure without changing the result; consume and own the task and observer.
+  /// Consume the unstarted Task and own a noexcept failure observer without changing its outcome.
+  /// Captured references remain caller-owned; the observer runs on the executing thread after child cleanup.
   template <detail::ErrorObserver F>
   Task on_error(F observer) && noexcept;
 };
@@ -515,16 +525,21 @@ struct TaskAccess {
 
 } // namespace detail
 
+/// co_await to fail the enclosing Task without exceptions; subsequent body statements are skipped.
+/// This routes failure, rather than performing I/O or adapting a synchronous Result.
 inline auto fail(Error error) noexcept
 {
   return detail::FailureAwaiter{error};
 }
 
+/// Fail the enclosing Task with a standard error condition; use as co_await fail(condition).
 inline auto fail(std::errc error) noexcept
 {
   return fail(std::make_error_code(error));
 }
 
+/// Consume and await a Task, returning Result<T> for recovery instead of propagating failure.
+/// Still drains the child; does not turn a synchronous Result into an asynchronous operation.
 template <class T>
 auto as_result(Task<T> task) noexcept
 {
@@ -603,8 +618,9 @@ Task<T> Task<T>::on_error(F observer) && noexcept
   return detail::observe_error(std::move(*this), std::move(observer));
 }
 
-// Serialized join-all: drain every child before propagating the first error in
-// argument order. No implicit sibling cancellation or concurrent graph resumption.
+/// Start all Task<void> children and drain every one, then propagate the first failure in argument order.
+/// Failure does not cancel siblings. Children inherit cancellation and form one serialized coroutine graph,
+/// not independently scheduled roots; keep borrowed resources alive until the entire join completes.
 template <class... Operations>
   requires(std::same_as<Operations, Task<void>> && ...)
 Task<void> when_all(Operations... operations)

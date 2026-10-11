@@ -1,28 +1,19 @@
 #pragma once
 
 #include <weave/postgres/connection.hpp>
+#include <weave/database/pool.hpp>
 
 namespace weave::pg {
 
-struct PoolOptions {
-  std::size_t max_connections = 16;
-  std::size_t min_connections = 1;
-  std::chrono::milliseconds acquire_timeout{30000};
-  std::chrono::milliseconds idle_timeout{300000};
-  std::chrono::milliseconds max_lifetime{1800000};
-};
-
-struct PoolStats {
-  std::size_t idle = 0;
-  std::size_t borrowed = 0;
-  std::size_t pending = 0;
-  u64 created = 0;
-  u64 discarded = 0;
-  bool closed = false;
-};
+/// Shared pool sizing/expiry policy used by the PostgreSQL driver.
+using PoolOptions = db::PoolOptions;
+/// Snapshot of PostgreSQL pool occupancy and cumulative session turnover.
+using PoolStats = db::PoolStats;
 
 class PooledConnection;
 
+/// Move-only asynchronous session pool bound to its creating Context or work-stealing domain.
+/// Sessions are exclusively checked out; release schedules reset before reuse, not immediate availability.
 class Pool {
   struct Impl;
   std::shared_ptr<Impl> impl_;
@@ -34,18 +25,25 @@ class Pool {
   static Task<PooledConnection> acquire_timed(std::shared_ptr<Impl> impl);
 
 public:
-  // Creates initial sessions on the executing Context or work-stealing domain.
+  /// Create initial sessions on the executing Context or work-stealing domain.
+  /// Capture owned configuration before the lazy Task starts: create(options) copies,
+  /// create(std::move(options)) transfers. The source Options need not outlive the Task or pool.
+  /// The pool retains configuration to open replacement sessions; callback-captured references remain caller-owned.
   static Task<Pool> create(Options options, PoolOptions limits = {});
   Pool(Pool &&other) noexcept;
   Pool(const Pool &) = delete;
   ~Pool();
 
+  /// Wait for an owned checkout, retaining the pool's shared state in the lazy Task.
+  /// Closing the pool rejects acquisitions; a successful lease keeps its session alive until returned/discarded.
   Task<PooledConnection> acquire();
-  // Reject/wake acquisitions and close idle sessions. Borrowers finish independently.
+  /// Reject/wake acquisitions and close idle sessions; borrowers finish independently. Does not join.
   void close() noexcept;
+  /// Synchronous thread-safe occupancy snapshot; not a readiness guarantee for the next acquire.
   PoolStats stats() const noexcept;
 };
 
+/// Move-only exclusive session checkout. Destruction returns it; active operations must drain first.
 class [[nodiscard]] PooledConnection {
   struct Entry;
   std::unique_ptr<Entry> entry_;
@@ -61,12 +59,15 @@ public:
   PooledConnection(const PooledConnection &) = delete;
   ~PooledConnection();
 
-  // References and session-specific handles are valid only during this checkout.
-  // Drain all method Tasks before releasing or destroying the lease.
+  /// Borrow the checked-out session. References and session-specific handles are valid only during this checkout.
+  /// Drain all method Tasks before releasing, discarding or destroying the lease.
   Connection &operator*() const noexcept;
+  /// Borrow the session with the same checkout lifetime as operator*(); this does not transfer ownership.
   Connection *operator->() const noexcept;
-  // Automatic return also happens at destruction. Both methods empty the lease.
+  /// Return the session for pool-managed reset/reuse; destruction also returns it automatically.
+  /// Empties this lease. All session operations and borrowed references must be finished first.
   void release() noexcept;
+  /// Retire the session instead of reusing it. Empties this lease; drain session operations first.
   void discard() noexcept;
 };
 

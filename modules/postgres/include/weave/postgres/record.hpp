@@ -2,6 +2,8 @@
 
 #include <weave/postgres/connection.hpp>
 #include <weave/postgres/detail/row_shape.hpp>
+#include <weave/database/record.hpp>
+#include <weave/database/selection.hpp>
 
 namespace weave::pg {
 
@@ -10,32 +12,7 @@ namespace detail {
 template <class T, class Selectors>
 Result<T> decode_record(const Row &row, const Selectors &selectors)
 {
-  T value{};
-  auto members = RowShape<T>::tie(value);
-  Result<void> status;
-
-  auto decode = [&]<std::size_t Index>() {
-    auto &member = std::get<Index>(members);
-    using Member = std::remove_cvref_t<decltype(member)>;
-
-    if (!status)
-      return;
-
-    auto decoded = row[selectors[Index]].template as<Member>();
-    if (!decoded) {
-      status = std::unexpected(decoded.error());
-      return;
-    }
-    member = std::move(*decoded);
-  };
-
-  [&]<std::size_t... Index>(std::index_sequence<Index...>) {
-    (decode.template operator()<Index>(), ...);
-  }(std::make_index_sequence<RowShape<T>::names.size()>{});
-
-  if (!status)
-    return std::unexpected(status.error());
-  return value;
+  return db::detail::decode_record<T, RowShape<T>>(row, selectors);
 }
 
 } // namespace detail
@@ -46,6 +23,8 @@ Result<T> Row::as() const &
   return detail::decode_record<T>(*this, detail::RowShape<T>::names);
 }
 
+/// Cached fixed-size struct mapping, retaining schema identity but not field payloads.
+/// Bind with ResultSet::decoder<T>(); automatic member names need no RowTraits specialization.
 template <class T>
 class RowDecoder {
   std::shared_ptr<const detail::RowSchema> schema_;
@@ -58,6 +37,8 @@ class RowDecoder {
   }
 
 public:
+  /// Decode only a row from the bound schema, or return schema_mismatch.
+  /// Owning members copy; view members borrow row data. Temporary rows are rejected.
   Result<T> decode(const Row &row) const
   {
     if (!schema_ || schema_ != row.schema_)
@@ -76,14 +57,15 @@ Result<RowDecoder<T>> ResultSet::decoder() const
     return std::unexpected(make_error_code(DecodeError::missing_column));
 
   constexpr auto &names = detail::RowShape<T>::names;
-  std::array<std::size_t, names.size()> indices{};
-  for (std::size_t index = 0; index < names.size(); ++index) {
-    auto selected = column(names[index]);
+  auto indices = db::bind_columns(names, [&](std::string_view name) -> Result<std::size_t> {
+    auto selected = column(name);
     if (!selected)
       return std::unexpected(selected.error());
-    indices[index] = selected->index();
-  }
-  return RowDecoder<T>{row_schema_, indices};
+    return selected->index();
+  });
+  if (!indices)
+    return std::unexpected(indices.error());
+  return RowDecoder<T>{row_schema_, *indices};
 }
 
 } // namespace weave::pg

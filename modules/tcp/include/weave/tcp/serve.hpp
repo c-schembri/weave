@@ -4,6 +4,7 @@
 
 namespace weave {
 
+/// Listener and per-client socket policy for the structured serve convenience API.
 struct ServeOptions {
   int backlog = 512;
   bool no_delay = false;
@@ -12,15 +13,18 @@ struct ServeOptions {
 
 namespace tcp {
 
-// Borrows listener until completion. Owns handlers and drains clients before returning.
-// Handler and error callback may be invoked concurrently on a work-stealing Runtime.
-// Client errors are observed and isolated; accept/submission errors fail the server.
+/// Borrow listener and own handler/observer through all clients' completion and cancellation.
+/// Handler takes an owned TcpStream and returns Task<void>; the optional observer is noexcept.
+/// Client errors are isolated; accept/submission failure cancels and drains clients before return.
+/// Shared callables may run concurrently on a stealing Runtime; captured references are not owned.
 template <detail::TcpServeHandler F, detail::ErrorObserver H = detail::IgnoreError>
 Task<void> serve(TcpListener &listener, AcceptOptions options, F handler, H on_error = {})
 {
   return weave::scope(detail::TcpServeBody<F, H>{listener, options, std::move(handler), std::move(on_error)});
 }
 
+/// Own a listener on the active Context and serve until failure/cancellation, draining clients.
+/// Owns handler/observer, not their reference captures. Port zero selects an ephemeral port.
 template <detail::TcpServeHandler F, detail::ErrorObserver H = detail::IgnoreError>
 Task<void> serve(Endpoint endpoint, ServeOptions options, F handler, H on_error = {})
 {
@@ -28,7 +32,8 @@ Task<void> serve(Endpoint endpoint, ServeOptions options, F handler, H on_error 
   co_await serve(listener, {.no_delay = options.no_delay}, std::move(handler), std::move(on_error));
 }
 
-// Lazy setup on the executing Context. address must remain alive until setup finishes.
+/// Serve a numeric IP literal on the active Context; borrow address through lazy listener setup.
+/// No DNS lookup or detached clients; owned handlers survive structured cancellation cleanup.
 template <detail::TcpServeHandler F, detail::ErrorObserver H = detail::IgnoreError>
 Task<void> serve(const char *address, u16 port, ServeOptions options, F handler, H on_error = {})
 {

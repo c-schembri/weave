@@ -58,7 +58,8 @@ struct JoinState : JoinStateBase {
 
 } // namespace detail
 
-// Dropping a handle releases the result, not the running task. Its execution owner retains it until completion.
+/// Move-only result handle for independently owned work. Dropping it neither cancels nor joins that work.
+/// Await/get consume it once; the executor retains the task through completion even if the handle is dropped.
 template <class T>
 class [[nodiscard]] JoinHandle {
   detail::JoinState<T> *state_;
@@ -92,19 +93,22 @@ public:
       state_->release();
   }
 
+  /// Nonblocking, thread-safe completion observation; does not consume the result.
   bool ready() const noexcept
   {
     detail::require(state_ != nullptr);
     return state_->ready();
   }
 
-  // Request cancellation; get/co_await still drains the task and returns its outcome.
+  /// Request cooperative cancellation without waiting; get/co_await still drains and observes the outcome.
   void cancel() noexcept
   {
     detail::require(state_ != nullptr);
     state_->cancellation.cancel();
   }
 
+  /// Consume the handle and block for Result<T>. Forbidden inside a running Context; await there instead.
+  /// An executor must drive the task elsewhere; this call does not run a Context event loop.
   Result<T> get() &&
   {
     detail::require(state_ && !detail::current_context);
@@ -145,7 +149,9 @@ public:
       message.target = detail::current_context;
       message.executor = detail::current_executor;
       message.state = continuation.address();
-      message.invoke = [](void *address) noexcept { std::coroutine_handle<>::from_address(address).resume(); };
+      message.invoke = [](void *address) noexcept {
+        std::coroutine_handle<>::from_address(address).resume();
+      };
 
       void *expected = nullptr;
       auto registered = state->completion.compare_exchange_strong(expected, &message, std::memory_order_acq_rel);
@@ -174,18 +180,21 @@ private:
   }
 
 public:
+  /// Consume the handle into a lazy join Task; failure propagates normally when awaited.
   Task<T> as_task() && noexcept
   {
     detail::require(state_ != nullptr);
     return wait(std::move(*this));
   }
 
+  /// Consume and join from active Weave execution, yielding T or propagating failure to the enclosing Task.
   auto operator co_await() && noexcept
   {
     return detail::TaskAwaiter<T, false>{std::move(*this).as_task()};
   }
 };
 
+/// Consume and join a handle, capturing Result<T> for recovery rather than propagating the child's failure.
 template <class T>
 auto as_result(JoinHandle<T> handle) noexcept
 {

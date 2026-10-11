@@ -5,6 +5,8 @@
 
 namespace weave {
 
+/// Thread-safe bounded owning queue. T must have noexcept move construction and destruction.
+/// Keep the channel alive through all pending sends/receives, including cancellation cleanup.
 template <class T>
   requires std::is_nothrow_move_constructible_v<T> && std::is_nothrow_destructible_v<T>
 class Channel {
@@ -112,6 +114,7 @@ class Channel {
   };
 
 public:
+  /// Allocate fixed queue storage; capacity must be positive (a contract requirement).
   explicit Channel(std::size_t capacity) : buffer_(capacity)
   {
     detail::require(capacity > 0);
@@ -124,6 +127,8 @@ public:
     detail::require(senders_.empty() && receivers_.empty());
   }
 
+  /// Own value before suspension: copy an lvalue or move an rvalue, then wait for capacity.
+  /// Cancellation/closure fails the task; the owned value is not returned to the caller.
   Task<void> send(T value)
   {
     auto result = co_await Sender{*this, std::move(value)};
@@ -131,6 +136,8 @@ public:
       co_await fail(result.error());
   }
 
+  /// Wait for an owned item; nullopt means closed and drained, not temporarily empty.
+  /// Execute on an active Context; cancellation fails with operation_canceled.
   Task<std::optional<T>> receive()
   {
     auto result = co_await Receiver{*this};
@@ -140,7 +147,8 @@ public:
     co_return std::move(*result);
   }
 
-  // A failed try_send leaves the caller's value unchanged.
+  /// Move from value only on successful immediate delivery. Failure leaves it unchanged.
+  /// Full queues return resource_unavailable_try_again; closed queues return SyncError::closed.
   Result<void> try_send(T &value) noexcept
   {
     std::lock_guard lock(domain_.mutex);
@@ -153,6 +161,8 @@ public:
     return {};
   }
 
+  /// Receive synchronously; open/empty returns resource_unavailable_try_again.
+  /// Closed/drained returns nullopt; buffered items remain available after close.
   Result<std::optional<T>> try_receive() noexcept
   {
     std::lock_guard lock(domain_.mutex);
@@ -165,6 +175,7 @@ public:
     return std::unexpected(std::make_error_code(std::errc::resource_unavailable_try_again));
   }
 
+  /// Reject sends and wake waiters without joining them. Buffered items can still be received.
   void close() noexcept
   {
     std::lock_guard lock(domain_.mutex);

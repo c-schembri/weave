@@ -89,8 +89,13 @@ auto shipment = row.as<Shipment>(); // Result<Shipment>
 ```
 
 Use `result.decoder<Shipment>()` to bind column indices once for repeated rows.
-See the [complete struct example](../modules/postgres/examples/queries/struct.cpp)
-(`postgres_struct`) and [struct conversion contracts](postgres-observability.md#struct-access).
+Start with the [simple struct example](../modules/postgres/examples/queries/simple_struct.cpp)
+(`postgres_simple_struct`): `row.as<Shipment>()`, with no registration.
+The [cached decoder example](../modules/postgres/examples/queries/struct.cpp)
+(`postgres_struct`) adds reusable column binding and text/binary results.
+See [struct conversion contracts](postgres-observability.md#struct-access).
+For optional column aliases, see the [shared mapping example](../modules/postgres/examples/queries/shared_mapping.cpp)
+(`postgres_shared_mapping`), using `db::RowTraits`.
 
 ## Borrowed Inputs
 
@@ -130,6 +135,9 @@ still use the existing allocation model. An array in a coroutine may itself live
 inside a heap-allocated frame.
 
 ## Pooling
+
+See the [runnable pool example](../modules/postgres/examples/connections/pool.cpp)
+(`postgres_pool`): four concurrent requests share two sessions on one Context.
 
 ```cpp
 weave::Task<void> example(weave::pg::Options options)

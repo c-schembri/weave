@@ -7,19 +7,23 @@
 
 namespace weave {
 
+/// Stream reading asynchronously into caller storage, with zero indicating EOF.
 template <class S>
 concept ReadStream = requires(S &stream, std::span<std::byte> buffer) {
   { stream.read(buffer) } -> std::same_as<Task<std::size_t>>;
 };
 
+/// Stream asynchronously writing every byte or failing, borrowing input until completion.
 template <class S>
 concept WriteStream = requires(S &stream, std::span<const std::byte> buffer) {
   { stream.write_all(buffer) } -> std::same_as<Task<void>>;
 };
 
+/// Stream implementing read and write_all; this alone does not imply thread safety.
 template <class S>
 concept DuplexStream = ReadStream<S> && WriteStream<S>;
 
+/// Duplex stream with synchronous cancel/close; callers still drain cancelled operations.
 template <class S>
 concept CancellableStream = DuplexStream<S> && requires(S &stream) {
   { stream.cancel() } -> std::same_as<Result<void>>;
@@ -28,6 +32,8 @@ concept CancellableStream = DuplexStream<S> && requires(S &stream) {
 
 namespace stream {
 
+/// Fill the borrowed buffer; premature EOF fails with connection_reset.
+/// Source and writable buffer must survive completion/cancellation cleanup.
 template <ReadStream S>
 Task<void> read_exactly(S &source, std::span<std::byte> buffer)
 {
@@ -41,6 +47,8 @@ Task<void> read_exactly(S &source, std::span<std::byte> buffer)
   }
 }
 
+/// Copy until source EOF using nonempty reusable caller storage; return bytes written.
+/// Both streams and the buffer are borrowed through completion/cancellation cleanup; neither stream is closed.
 template <ReadStream R, WriteStream W>
 Task<std::size_t> copy(R &source, W &destination, std::span<std::byte> buffer)
 {

@@ -8,7 +8,8 @@
 
 namespace weave {
 
-// Strict decimal port in [0, 65535]; zero permits an OS-assigned local port.
+/// Parse an entire unsigned decimal port in [0, 65535]; reject whitespace, signs and trailing characters.
+/// Zero permits an OS-assigned local port. Borrows text only during the call; failure is invalid_argument.
 [[nodiscard]] inline std::expected<std::uint16_t, std::error_code> parse_port(std::string_view text) noexcept
 {
   if (!text.empty()) {

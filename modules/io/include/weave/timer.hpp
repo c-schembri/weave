@@ -6,6 +6,8 @@
 
 namespace weave {
 
+/// Suspend active Weave execution until a steady-clock deadline, or fail with operation_canceled.
+/// Uses the executing Context's timer queue, not a sleeping worker/helper thread; expired deadlines complete promptly.
 [[nodiscard]] Task<void> sleep_until(std::chrono::steady_clock::time_point deadline);
 
 namespace detail {
@@ -31,7 +33,8 @@ Result<std::chrono::steady_clock::time_point> deadline_after(std::chrono::durati
 
 } // namespace detail
 
-// Relative time starts when this lazy task executes, not when it is constructed.
+/// Sleep cooperatively; the duration starts when this lazy Task executes, not when it is constructed.
+/// Nonpositive durations are immediate, NaN is invalid_argument, and cancellation fails with operation_canceled.
 template <class Rep, class Period>
 Task<void> sleep_for(std::chrono::duration<Rep, Period> duration)
 {
