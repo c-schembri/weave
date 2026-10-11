@@ -1,4 +1,5 @@
 #include "wire.hpp"
+#include "row_schema.hpp"
 #include <array>
 
 namespace weave::pg {
@@ -544,22 +545,34 @@ Result<Notification> notification(std::span<const std::byte> body)
   return value;
 }
 
-Result<Row> row(std::span<const std::byte> body, std::span<const Column> columns, ResultArena arena)
+Result<Row> row(
+  std::span<const std::byte> body,
+  std::span<const Column> columns,
+  ResultArena arena,
+  std::shared_ptr<const RowSchema> schema)
 {
-  auto values = row(body, columns.size(), std::move(arena));
+  auto values = row(body, columns.size(), arena);
   if (!values)
     return std::unexpected(values.error());
 
-  for (std::size_t index = 0; index < values->size(); ++index)
-    (*values)[index].format = columns[index].format;
+  for (std::size_t index = 0; index < values->size(); ++index) {
+    values->values()[index].format = columns[index].format;
+    values->values()[index].type = columns[index].type;
+  }
+  if (!schema)
+    schema = make_row_schema(columns, values->get_allocator().arena());
+  RowAccess::bind(*values, std::move(schema));
 
   return values;
 }
 
-Result<void> bind(
+namespace {
+
+template <class Parameters>
+Result<void> bind_parameters(
   Writer &request,
   std::string_view name,
-  const std::vector<Parameter> &parameters,
+  const Parameters &parameters,
   Format format,
   std::size_t limit,
   std::string_view portal)
@@ -613,6 +626,30 @@ Result<void> bind(
   body.integer(static_cast<u32>(format), 2);
   request.message('B', body);
   return {};
+}
+
+} // namespace
+
+Result<void> bind(
+  Writer &request,
+  std::string_view name,
+  const std::vector<Parameter> &parameters,
+  Format format,
+  std::size_t limit,
+  std::string_view portal)
+{
+  return bind_parameters(request, name, parameters, format, limit, portal);
+}
+
+Result<void> bind(
+  Writer &request,
+  std::string_view name,
+  std::span<const ParameterView> parameters,
+  Format format,
+  std::size_t limit,
+  std::string_view portal)
+{
+  return bind_parameters(request, name, parameters, format, limit, portal);
 }
 
 Result<Writer> function_call(u32 function, const std::vector<Parameter> &parameters, Format format, std::size_t limit)

@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "benchmarks"))
 import run_concurrent as bench
+import buffers
 
 
 def metrics(operations=128, seconds=1, cycles=100000):
@@ -21,6 +22,21 @@ def metrics(operations=128, seconds=1, cycles=100000):
 
 
 class MetricsTests(unittest.TestCase):
+    def test_buffer_samples_do_not_shrink_for_one_slow_pilot(self):
+        pilots = [{"operations": 1024, "seconds": elapsed} for elapsed in (0.05, 0.1, 1.0)]
+        count = buffers.sample_count(pilots, 1.0)
+        self.assertEqual(count, 22528)
+        self.assertGreaterEqual(count / (1024 / 0.05), 1.1)
+        self.assertEqual(buffers.sample_count(pilots, 100), 100000)
+        invalid = ([], [{"operations": 1024, "seconds": 0}],
+                   [{"operations": 1024, "seconds": float("nan")}],
+                   [{"operations": 1024, "seconds": 1}, {"operations": 16, "seconds": 1}])
+        for values in invalid:
+            with self.subTest(pilots=values), self.assertRaises(ValueError):
+                buffers.sample_count(values, 1)
+        with self.assertRaises(ValueError):
+            buffers.sample_count(pilots, float("nan"))
+
     def test_fixed_physical_core_budget(self):
         cores = [[0, 1], [2, 3], [4, 5], [6, 7]]
         self.assertEqual(bench.placement(cores, 1, 2), [6])

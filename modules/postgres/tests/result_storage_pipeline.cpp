@@ -166,11 +166,16 @@ static weave::Task<void> stream_consumer(pg::Pipeline &pipeline, const StreamCas
       REQUIRE_FALSE(result.rows.empty());
       CHECK(result.rows.size() <= configuration.chunk_rows);
       CHECK(result.command.empty());
+      auto column = result.column("value");
+      CHECK(column.has_value());
       for (const auto &row : result.rows) {
         memory_test::own_row(row);
         CHECK(row.get_allocator().arena().identity() == arena.identity());
         REQUIRE(row.size() == 1);
         CHECK(row.front().bytes() == payload);
+        CHECK(row.get<std::string_view>("value") == payload);
+        if (column)
+          CHECK(row[*column].text() == payload);
         ++rows;
       }
 

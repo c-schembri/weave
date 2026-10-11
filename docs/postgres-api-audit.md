@@ -16,8 +16,8 @@ six, for **193 distinct functions**. SHA-256:
 Each function has exactly one table row. The three compatibility macros are
 listed separately. This inventories callable interfaces, not every enum,
 feature macro, connection keyword, server version or operating-system behavior.
-The [capability matrix](postgres-parity.md), detailed guides and
-[qualification record](postgres-qualification.md) remain necessary evidence.
+Read the [capability boundaries](#capability-boundaries) and
+[validation scope](testing.md) alongside the API guides.
 
 ## Reading The Status
 
@@ -62,7 +62,7 @@ Weave mappings are in [connection.hpp](../modules/postgres/include/weave/postgre
 
 ## Cancellation
 
-[Connection contracts](postgres-connections.md#cancellation) and
+[Connection contracts](postgres-connections.md#cancellation-and-reset) and
 [cancel_handle implementation](../modules/postgres/src/connection.cpp) cover
 endpoint/security snapshots and protocol-version-specific secrets.
 [Cancellation reference](https://www.postgresql.org/docs/18/libpq-cancel.html).
@@ -85,8 +85,8 @@ endpoint/security snapshots and protocol-version-specific secrets.
 
 ## Connection Status And Security
 
-[Metadata contracts](postgres-metadata.md), [GSS contracts](postgres-gss.md) and
-[encoding contracts](postgres-encoding.md) describe the actual public boundaries.
+[Metadata contracts](postgres-observability.md#metadata), [GSS contracts](postgres-connections.md#gss) and
+[encoding contracts](postgres-observability.md#encoding) describe the actual public boundaries.
 [Status reference](https://www.postgresql.org/docs/18/libpq-status.html).
 
 | libpq function | Status | Weave mapping or remaining difference |
@@ -108,7 +108,7 @@ endpoint/security snapshots and protocol-version-specific secrets.
 | `PQerrorMessage` | Partial | Owning last_failure retains admitted-operation local/SQL errors and server diagnostics after transport closure; bounded ConnectionReport formats connect/reset attempts; no per-invocation mutable libpq-style message buffer |
 | `PQsocket` | Different | No native socket export or manual readiness integration |
 | `PQbackendPID` | Mapped | `backend_process` getter or owning info snapshot |
-| `PQpipelineStatus` | Mapped | Synchronous Connection/BlockingConnection pipeline_status reports off/on/aborted lease and recovery state; not transport health, native result-consumption timing or unsynchronized exit policy; [contract](postgres-metadata.md#pipeline-state) |
+| `PQpipelineStatus` | Mapped | Synchronous Connection/BlockingConnection pipeline_status reports off/on/aborted lease and recovery state; not transport health, native result-consumption timing or unsynchronized exit policy; [contract](postgres-observability.md#metadata) |
 | `PQconnectionNeedsPassword` | Mapped | Owning report/attempt authentication.password_missing records a recognized challenge with no effective password, without a failed live Connection or retained secrets; not an automatic retry/prompt instruction |
 | `PQconnectionUsedPassword` | Mapped | authentication.password_requested maps password-demand facts on success/failure; native UsedPassword is not proof of actual password use, including SCRAM key passthrough; malformed native partial flags are not promised |
 | `PQconnectionUsedGSSAPI` | Mapped | Negotiated authentication method; independent of GSS transport encryption |
@@ -126,8 +126,8 @@ endpoint/security snapshots and protocol-version-specific secrets.
 
 ## Diagnostics, Notices And Tracing
 
-Mappings: [Diagnostic/notice API](postgres-notices.md),
-[protocol trace API](postgres-tracing.md), and
+Mappings: [Diagnostic/notice API](postgres-observability.md#notices-and-notifications),
+[protocol trace API](postgres-observability.md#protocol-tracing), and
 [control reference](https://www.postgresql.org/docs/18/libpq-control.html).
 
 | libpq function | Status | Weave mapping or remaining difference |
@@ -143,8 +143,8 @@ Mappings: [Diagnostic/notice API](postgres-notices.md),
 
 ## Commands And Streaming Results
 
-Mappings: [query guide](postgres.md), [pipeline guide](postgres-pipelines.md),
-[exchange guide](postgres-exchanges.md),
+Mappings: [query guide](postgres.md), [pipeline guide](postgres-advanced.md#pipelines),
+[exchange guide](postgres-advanced.md#mixed-exchanges),
 [execution reference](https://www.postgresql.org/docs/18/libpq-exec.html) and
 [async reference](https://www.postgresql.org/docs/18/libpq-async.html).
 
@@ -173,8 +173,8 @@ Mappings: [query guide](postgres.md), [pipeline guide](postgres-pipelines.md),
 ## COPY, Progress And Fast Path
 
 [COPY reference](https://www.postgresql.org/docs/18/libpq-copy.html),
-[raw replication scope](postgres-replication.md) and
-[mixed result/COPY API](postgres-exchanges.md).
+[raw replication scope](postgres-advanced.md#replication) and
+[mixed result/COPY API](postgres-advanced.md#mixed-exchanges).
 
 | libpq function | Status | Weave mapping or remaining difference |
 | --- | --- | --- |
@@ -190,7 +190,7 @@ Mappings: [query guide](postgres.md), [pipeline guide](postgres-pipelines.md),
 | `PQisnonblocking` | Different | API type identifies execution model; no mutable mode bit |
 | `PQisthreadsafe` | External | No libpq global predicate; Connection remains single execution owner, not a shared thread-safe session |
 | `PQping` | Mapped | ping/ping_blocking with explicit Options parsing/loading; recovering-host, wire/TLS, real-server and Linux protected-GSS controls qualified across Windows/Linux profiles; broader domain/deployment qualification remains separate |
-| `PQpingParams` | Mapped | Typed Options probe distinguishes accepting/rejecting/no_response; configuration/security/cancellation remain Task/Result errors; strict protocol validation and startup-EOF retry deliberately differ from native libpq; [scope](postgres-connections.md#server-availability) |
+| `PQpingParams` | Mapped | Typed Options probe distinguishes accepting/rejecting/no_response; configuration/security/cancellation remain Task/Result errors; strict protocol validation and startup-EOF retry deliberately differ from native libpq; [scope](postgres-connections.md#host-selection-and-liveness) |
 | `PQflush` | Different | Await writes or Pipeline send/duplex flush; no ordinary-session partial-write polling status |
 | `PQfn` | Mapped | call_function with owned nullable values and text/binary formats; SQL failures preserve SQLSTATE |
 
@@ -244,7 +244,7 @@ SELECT can have columns and no rows; a description is not query completion.
 
 ## Result Ownership And Construction
 
-[Lifecycle event contracts](postgres-events.md) describe observer behavior on
+[Lifecycle event contracts](postgres-observability.md#lifecycle-events) describe observer behavior on
 actual query results, copies and application-built values.
 
 | libpq function | Status | Weave mapping or remaining difference |
@@ -252,15 +252,15 @@ actual query results, copies and application-built values.
 | `PQclear` | Different | Owning ResultSet destruction; results can outlive the Connection |
 | `PQfreemem` | Different | Standard owning values/deleters instead of public C allocations |
 | `PQmakeEmptyPGresult` | Different | Application ResultSet construction and checked Outcome::failure(Diagnostic) own their data; no fabricated native wire status or automatic pending result-observer lifecycle |
-| `PQcopyResult` | Mapped | Synchronous ResultSet::copy selects columns/rows/observers; rows imply schema, hooks choose clone/share and can reject their destination registration; Weave preserves actual kind/metadata instead of forcing TUPLES_OK, and notice handlers remain Connection-owned; [contracts](postgres-results.md#selective-copies) |
+| `PQcopyResult` | Mapped | Synchronous ResultSet::copy selects columns/rows/observers; rows imply schema, hooks choose clone/share and can reject their destination registration; Weave preserves actual kind/metadata instead of forcing TUPLES_OK, and notice handlers remain Connection-owned; [contracts](postgres-observability.md#results) |
 | `PQsetResultAttrs` | Mapped | Application-owned columns can be populated directly |
 | `PQresultAlloc` | Different | Application-owned C++ allocations; no public result arena allocator |
-| `PQresultMemorySize` | Mapped | Synchronous memory_size reports distinct reachable retained backing requests; nine-profile permanent regression, eight native controls, real-server, reduced-build and packaging gates pass; shared pools are nonexclusive, inspection may allocate scratch, and opaque receiver/application allocations are excluded; not RSS or libpq byte identity; [boundary](postgres-result-storage.md) |
+| `PQresultMemorySize` | Mapped | Synchronous memory_size reports distinct reachable retained backing requests; nine-profile permanent regression, eight native controls, real-server, reduced-build and packaging gates pass; shared pools are nonexclusive, inspection may allocate scratch, and opaque receiver/application allocations are excluded; not RSS or libpq byte identity; [boundary](postgres-observability.md#copies-and-storage) |
 | `PQsetvalue` | Mapped | Application-owned Row/Value storage can be populated directly |
 
 ## Escaping And Display
 
-[Encoding and quoting contracts](postgres-encoding.md) require actual client
+[Encoding and quoting contracts](postgres-observability.md#encoding) require actual client
 encoding and deliberately reject unsafe NUL/continuation-quote cases.
 
 | libpq function | Status | Weave mapping or remaining difference |
@@ -279,7 +279,7 @@ encoding and deliberately reject unsafe NUL/continuation-quote cases.
 ## Large Objects
 
 [Public APIs](../modules/postgres/include/weave/postgres/large_object.hpp),
-[ownership and client-file guide](postgres-large-objects.md) and
+[ownership and client-file guide](postgres-advanced.md#large-objects) and
 [large-object reference](https://www.postgresql.org/docs/18/lo-interfaces.html).
 Both async and blocking overloads exist except client-file operations, which
 are deliberately blocking. Descriptors remain transaction/session-bound.
@@ -306,7 +306,7 @@ are deliberately blocking. Descriptors remain transaction/session-bound.
 ## Utilities And Authentication Hooks
 
 [Encoding API](../modules/postgres/include/weave/postgres/encoding.hpp),
-[password API](postgres-passwords.md), [OAuth provider API](postgres-oauth.md)
+[password API](postgres-connections.md#passwords), [OAuth provider API](postgres-connections.md#oauth)
 and [TLS credentials](tls.md).
 [Miscellaneous reference](https://www.postgresql.org/docs/18/libpq-misc.html) and
 [OAuth reference](https://www.postgresql.org/docs/18/libpq-oauth.html).
@@ -330,12 +330,12 @@ and [TLS credentials](tls.md).
 | `pg_encoding_to_char` | Mapped | encoding_info supplies canonical name |
 | `pg_valid_server_encoding_id` | Mapped | encoding_info.server distinguishes frontend-only encodings |
 | `PQgetSSLKeyPassHook_OpenSSL` | Different | No global native password-hook registration; explicit owned TLS credential options |
-| `PQsetSSLKeyPassHook_OpenSSL` | Different | Owned per-credential TlsPasswordProvider handles PEM/DER/configured STORE loading; no process-global hook, PGconn callback argument, legacy ENGINE setup or stdin fallback; [contracts](tls.md#server-and-adapters) |
+| `PQsetSSLKeyPassHook_OpenSSL` | Different | Owned per-credential TlsPasswordProvider handles PEM/DER/configured STORE loading; no process-global hook, PGconn callback argument, legacy ENGINE setup or stdin fallback; [contracts](tls.md#credentials) |
 | `PQdefaultSSLKeyPassHook_OpenSSL` | Different | Credential factory never prompts on stdin; applications supply credentials explicitly |
 
 ## Lifecycle Events
 
-[Owning lifecycle API](postgres-events.md) maps real result lifetimes rather
+[Owning lifecycle API](postgres-observability.md#lifecycle-events) maps real result lifetimes rather
 than manufacturing PGresult objects for unrelated errors, rows and COPY events.
 [Event-system reference](https://www.postgresql.org/docs/18/libpq-events.html).
 
@@ -376,16 +376,10 @@ the individual rows rather than treating a broad category as drop-in parity.
 INSERT-OID extraction, bounded result display, application-created failures,
 hashed CRL directories and PEM/DER/configured OpenSSL STORE keys are implemented.
 STORE does not reproduce legacy ENGINE installation and redacts secret-bearing
-locators. [Result contracts](postgres-results.md) and [TLS contracts](tls.md)
+locators. [Result contracts](postgres-observability.md#results) and [TLS contracts](tls.md)
 document ownership, security and output differences.
 
-The fixed implementation batch is complete. Windows domain/HSM/provider/FIPS
-deployments and independent security review are external qualification boundaries,
-not evidence supplied by this audit. Existing replica, OAuth and LDAP guides retain
-their precise deployment limits. [Latest validation](postgres-closure.md).
-
-The subsequent migration batch adds all six TLS modes, explicit conventional
-credential loading, latest-attempt phase timings and opt-in sensitive key logging.
-These expand configuration behavior without inventing more libpq function aliases.
-Strong defaults, restricted weak-mode fallback and deployment boundaries remain;
-[contracts](postgres-connections.md#explicit-libpq-migration-profile).
+Deployment-specific domain/HSM/provider/FIPS behavior and independent security
+review are not established by this inventory. See [testing boundaries](testing.md)
+and [configuration policies](postgres-connections.md), including the explicit
+libpq migration subset. Pooling is a Weave capability, not a new libpq alias.

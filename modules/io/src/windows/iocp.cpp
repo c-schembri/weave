@@ -353,6 +353,11 @@ void Context::check_thread() const noexcept
   detail::require(correct_owner || correct_group);
 }
 
+void detail::ContextAccess::check_execution(const Context &context) noexcept
+{
+  IoAccess::check_execution(context);
+}
+
 void Context::count(u64 &counter, u64 amount) noexcept
 {
   if (impl_->scheduler_group_ || impl_->domain_)

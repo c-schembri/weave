@@ -86,7 +86,7 @@ static void copies(const pg::ResultSet &source, pg::EventId key, const std::shar
           for (std::size_t row = 0; row < source.rows.size(); ++row) {
             check(result.rows[row].size() == source.rows[row].size());
             for (std::size_t column = 0; column < source.rows[row].size(); ++column) {
-              check(result.rows[row][column].data == source.rows[row][column].data);
+              check(result.rows[row].values()[column].data == source.rows[row].values()[column].data);
               check(result.rows[row][column].format == source.rows[row][column].format);
             }
           }

@@ -4,8 +4,8 @@
 
 Async networking for C++23. Small APIs, explicit ownership, no exceptions.
 
-**Experimental.** Windows IOCP and Linux io_uring backends are implemented.
-Not production-ready. No epoll or macOS backend.
+**Experimental, not production-certified.** Windows IOCP and Linux io_uring.
+No epoll or macOS backend.
 
 ## Start Here
 
@@ -30,21 +30,18 @@ int main()
       [](weave::TcpStream &client, std::span<const std::byte> data) {
         return client.write_all(data);
       })));
+
   if (!result)
     return weave::report_error(result.error());
 }
 ```
 
-`Task<T>` produces `T` or fails with `std::error_code`. Awaited errors propagate
-automatically; synchronous setup and `run()` return `Result<T>` (`std::expected`).
-`tcp::serve` handles clients concurrently and owns their tasks. `on_data` manages
-each client's receive buffer and waits for its callback before reading again.
+`Task<T>` produces T or fails with std::error_code; awaited failures propagate
+automatically. Synchronous setup and `run()` return `Result<T>` (std::expected).
+`serve` owns concurrent clients; `on_data` owns their receive buffers and awaits
+each callback before reading again.
 
-Windows x64, Visual Studio 2022 C++ workload, CMake 3.25+, Git, and Python 3.11+
-for tests. Linux uses GCC 14+ with liburing 2.3+ and a kernel supporting io_uring.
-Python is not needed for library-only builds. TLS needs OpenSSL 3.5+;
-PostgreSQL also needs ICU 70+.
-[Linux/WSL setup and current limitations](docs/linux.md).
+Windows: VS 2022 C++ tools, CMake 3.25+, Git; Python 3.11+ for tests.
 
 ```sh
 git clone https://github.com/c-schembri/weave.git
@@ -55,40 +52,32 @@ ctest --preset ci-release
 ./build/windows-ci/Release/echo_server_context_minimal.exe
 ```
 
-[Echo examples](modules/tcp/examples/echo/README.md) include explicit stream loops,
-library-managed buffers, single-thread and multicore variants, and other libraries.
+[Linux/WSL requirements and installation](docs/build.md) /
+[self-contained echo variants and other libraries](modules/tcp/examples/echo/README.md).
 
 ## Main APIs
 
-**Execution.** A `Context` drives I/O on the calling thread. A `Runtime` manages
-worker threads and contexts; replace the Context setup above for multicore execution:
+**Execution:** Context runs on the calling thread; Runtime manages worker threads
+and Contexts. Both expose create/run/spawn/detach.
 
 ```cpp
-#include <weave/runtime.hpp>
-
 auto runtime = weave::Runtime::create({
-  .workers = 4, .scheduler = weave::Scheduler::work_stealing});
+  .workers = 4,
+  .scheduler = weave::Scheduler::work_stealing,
+});
 if (!runtime)
   return weave::report_error(runtime.error());
 
-auto result = runtime->run(weave::tcp::serve(
-  "127.0.0.1",
-  8080,
-  {.no_delay = true},
-  weave::tcp::on_data(
-    [](weave::TcpStream &client, std::span<const std::byte> data) {
-      return client.write_all(data);
-    })));
+auto result = runtime->run(server());
 if (!result)
   return weave::report_error(result.error());
 ```
 
-Use `spawn()` when you need a join handle, `detach()` when you do not. Inside a
-task, `weave::detach()` selects the executing context/runtime. Outside one, use
-`ctx->spawn(...)`, `ctx->detach(...)`, or the runtime equivalents.
-[`run()` does not join independent tasks.](docs/context.md)
+Include `<weave/runtime.hpp>` for Runtime. Spawn returns a join handle; detach
+transfers ownership without one. `run` does not join unrelated tasks.
+[Execution, ownership and cancellation](docs/execution.md).
 
-**TCP.** Inside a task, connect/listen use its executing context:
+**TCP:** Contextless setup uses the executing Task's Context.
 
 ```cpp
 auto client = co_await weave::tcp::connect("localhost", 8080);
@@ -96,18 +85,13 @@ auto listener = co_await weave::tcp::listen("127.0.0.1", 8080);
 auto accepted = co_await listener.accept({.no_delay = true});
 ```
 
-Streams provide `read()`, `read_exactly()`, and `write_all()`. A zero-length read
-means EOF. IPv4, IPv6, and asynchronous DNS are supported.
-[TCP guide](docs/tcp.md) / [Addresses and DNS](docs/addresses.md).
+Read/write Tasks are `read`, `read_exactly`, `write_all`; nonempty read returns
+zero at EOF. IPv4/IPv6, asynchronous DNS and local sockets share this ownership model.
+[TCP, local sockets and stream helpers](docs/networking.md).
 
-**Local sockets.** `local::connect()` and `local::listen()` use the same Task and
-stream model for filesystem sockets on Windows/Linux and abstract sockets on Linux.
-[Local sockets and peer credentials](docs/local.md).
-
-**Errors and timeouts.** Handle errors explicitly only where you want recovery:
+**Recovery and deadlines:** explicitly inspect errors only where recovery is wanted.
 
 ```cpp
-#include <weave/timer.hpp>
 using namespace std::chrono_literals;
 
 co_await weave::sleep_for(250ms);
@@ -116,59 +100,40 @@ if (!result)
   WEAVE_LOG_ERROR("Read: %s", result.error().message().c_str());
 ```
 
-Cancellation is cooperative: cancel, then await/join before releasing borrowed
-resources. Keep contexts, streams, buffers and arguments alive through completion.
-[Tasks and lifetimes](docs/tasks.md) / [Cancellation, scopes and timers](docs/cancellation.md).
+Include `<weave/timer.hpp>`. Cancellation is cooperative: cancel, then join/drain
+before releasing borrowed streams/buffers. [Scopes and timers](docs/execution.md).
 
-**Synchronization.** Bounded `Channel<T>` provides async send/receive with
-backpressure; `Semaphore` limits concurrent work with RAII permits. Both support
-cancellation and cross-context wakeups. [Guide and example](docs/synchronization.md).
+**PostgreSQL:** native protocol, no libpq dependency.
 
-**Streams and TLS.** Small stream concepts let helpers work over TCP, TLS, and
-custom transports. Optional OpenSSL-backed TLS has verified client/server
-handshakes, mTLS, explicit session/revocation policy and the same read/write API.
-[Stream helpers](docs/streams.md) /
-[TLS setup, example, and limitations](docs/tls.md).
+```cpp
+auto pool = co_await weave::pg::Pool::create(options);
+auto database = co_await pool.acquire();
+auto rows = co_await database->execute("SELECT 42");
+// The lease returns automatically at scope exit.
+```
 
-**PostgreSQL.** Native protocol Tasks cover verified connections, queries,
-prepared statements, batching, row streaming and COPY. A blocking facade drives
-the same engine. The implemented scope is experimental, not drop-in libpq parity.
-[API and examples](docs/postgres.md) / [Parity checklist](docs/postgres-parity.md) /
-[libpq benchmarks](docs/postgres-benchmarks.md).
+Include `<weave/postgres.hpp>`. Queries, prepared statements, batching, COPY,
+streaming and blocking use share the same engine.
+[PostgreSQL API and pooling](docs/postgres.md) / [libpq compatibility](docs/postgres-api-audit.md).
 
-[TLS modes and explicit libpq configuration migration](docs/postgres-connections.md#explicit-libpq-migration-profile) /
-[Connection diagnostics](docs/postgres-diagnostics.md#connection-reports).
-
-[Supported scope and deployment boundaries](docs/postgres-release.md).
-
-Latest native Windows PostgreSQL run (10 October 2026), four workers / 32 connections:
-
-| Plaintext workload | Weave affine ops/s | libpq ops/s |
-| --- | ---: | ---: |
-| Simple query | 105,239 | 114,188 |
-| Prepared query | 113,959 | 123,078 |
-| Batch statements | 528,713 | 535,137 |
-| Row-heavy query | 27,897 | 33,266 |
-
-Seven sequential samples; throughput spread 1.9-7.9%. This is not a uniform win.
-[TLS, both schedulers, tail latency and memory](docs/postgres-benchmarks.md) /
-[Raw evidence and exact working-tree provenance](https://github.com/c-schembri/weave/releases/tag/benchmarks-20261010-postgres-final).
+**TLS and synchronization:** verified OpenSSL streams, mTLS and explicit session/
+revocation controls; bounded Channel and Semaphore for backpressure/admission.
+[TLS](docs/tls.md) / [synchronization](docs/synchronization.md).
 
 ## Use In Your Project
 
-Include and link only the components you need. TCP does not depend on Runtime.
+Include/link only what you need. TCP does not require Runtime.
 
 | Component | Header | CMake target |
 | --- | --- | --- |
-| Tasks, results | `<weave/core.hpp>` | `weave::core` |
-| Context, submission, timers | `<weave/io.hpp>` | `weave::io` |
+| Tasks, results, stream helpers | `<weave/core.hpp>`, `<weave/stream.hpp>` | `weave::core` |
+| Context and timers | `<weave/io.hpp>` | `weave::io` |
 | Multicore runtime | `<weave/runtime.hpp>` | `weave::runtime` |
-| TCP streams and servers | `<weave/tcp.hpp>` | `weave::tcp` |
-| Local socket streams | `<weave/local.hpp>` | `weave::local` |
-| Channels and semaphores | `<weave/sync.hpp>` | `weave::sync` |
-| Stream concepts and helpers | `<weave/stream.hpp>` | `weave::core` |
-| Verified TLS streams (OpenSSL 3.5+) | `<weave/tls.hpp>` | `weave::tls` |
-| Native PostgreSQL client (experimental) | `<weave/postgres.hpp>` | `weave::postgres` |
+| TCP | `<weave/tcp.hpp>` | `weave::tcp` |
+| Local sockets | `<weave/local.hpp>` | `weave::local` |
+| Channels/semaphores | `<weave/sync.hpp>` | `weave::sync` |
+| TLS (OpenSSL 3.5+) | `<weave/tls.hpp>` | `weave::tls` |
+| PostgreSQL (also ICU 70+) | `<weave/postgres.hpp>` | `weave::postgres` |
 
 ```cmake
 set(WEAVE_MODULES "tcp;runtime" CACHE STRING "" FORCE)
@@ -177,14 +142,12 @@ target_link_libraries(my_app PRIVATE weave::tcp weave::runtime)
 ```
 
 Installed packages support `find_package(weave CONFIG REQUIRED COMPONENTS tcp)`.
-[Build and installation](docs/build.md) / [Module structure](docs/architecture.md) /
-[Context](docs/context.md) / [Runtime](docs/runtime.md) / [Roadmap](docs/roadmap.md).
+[Build guide](docs/build.md) / [all documentation](docs/README.md).
 
 ## Local Runtime Benchmarks
 
-We measure runtime scaling locally with 1/2/4/8/16/32 server cores where hardware
-permits, keeping client cores separate and fixed. Hosted CI runs correctness
-tests only; benchmark evidence is uploaded separately, not committed as raw files.
+Hosted CI runs correctness tests only. Local measurements reserve fixed separate
+client cores and test 1/2/4/8/16/32 server cores where hardware permits.
 
 <!-- benchmark-results:start -->
 Local Windows run: 2026-10-06 18:26 +1100, AMD Ryzen 9 9900X 12-Core Processor. Source: [`dd0d265`](https://github.com/c-schembri/weave/commit/dd0d265e711ec31580daf93715ef8b547da4f615).
@@ -211,17 +174,14 @@ Closed-loop loopback results, not universal runtime rankings. Client-busy rows d
 [Full measurements and raw evidence](https://github.com/c-schembri/weave/releases/tag/benchmarks-20261006-182604) / [methodology](https://github.com/c-schembri/weave/blob/main/docs/runtime-scaling.md).
 <!-- benchmark-results:end -->
 
-All 560 windows passed timing validation. Default-layout throughput is essentially
-unchanged. Shared IOCP improves this workload at four cores but regresses at eight;
-it remains opt-in. [Optimization findings and CPU/tail results](docs/runtime-performance.md).
-
-[Scaling methodology](docs/runtime-scaling.md) /
-[Manual benchmark suites](docs/benchmarks.md).
+Shared IOCP stays opt-in; default-layout throughput was essentially unchanged.
+[Scaling, CPU/tail findings and reproduction](docs/runtime-scaling.md) /
+[latest PostgreSQL/libpq measurements](docs/postgres-benchmarks.md).
 
 ## Development
 
-Windows correctness CI runs MSVC Debug, Release, and AddressSanitizer tests;
-performance comparisons run locally on suitable hardware. Raw benchmark results
-are uploaded assets, not tracked source files. [Development rules](AGENTS.md).
+Windows CI covers MSVC Debug, Release and AddressSanitizer. Benchmarks are manual;
+raw evidence is uploaded separately, not tracked. [Testing](docs/testing.md) /
+[architecture](docs/architecture.md) / [development rules](AGENTS.md).
 
-No project license has been selected yet. Third-party dependencies retain their own licenses.
+No project license has been selected. Third-party dependencies retain their licenses.

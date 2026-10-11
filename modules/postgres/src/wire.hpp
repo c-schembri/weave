@@ -118,12 +118,17 @@ using Writer = BasicWriter<Bytes>;
 struct Message {
   char kind = 0;
   Bytes body;
+  std::optional<CopyRead> copied;
 };
 
 Result<Diagnostic> diagnostic(std::span<const std::byte> body);
 Result<std::vector<Column>> columns(std::span<const std::byte> body, ResultArena arena = {});
 Result<Row> row(std::span<const std::byte> body, std::size_t columns, ResultArena arena = {});
-Result<Row> row(std::span<const std::byte> body, std::span<const Column> columns, ResultArena arena = {});
+Result<Row> row(
+  std::span<const std::byte> body,
+  std::span<const Column> columns,
+  ResultArena arena = {},
+  std::shared_ptr<const RowSchema> schema = {});
 Result<Notification> notification(std::span<const std::byte> body);
 Result<void> bind(
   Writer &request,
@@ -134,5 +139,13 @@ Result<void> bind(
   std::string_view portal = {});
 
 Result<Writer> function_call(u32 function, const std::vector<Parameter> &parameters, Format format, std::size_t limit);
+
+Result<void> bind(
+  Writer &request,
+  std::string_view name,
+  std::span<const ParameterView> parameters,
+  Format format,
+  std::size_t limit,
+  std::string_view portal = {});
 
 } // namespace weave::pg::detail

@@ -133,8 +133,48 @@ cores. The raw report includes both candidates' matched comparisons against the
 before binary, Asio and Tokio, and every observed outlier. Neither additional
 backend changes the baseline library configuration or payload/validation work.
 
-For stall diagnosis, use [execution tracing](runtime-performance.md). Traces and
+For stall diagnosis, use [execution tracing](#diagnostic-tracing). Traces and
 profile builds are never accepted as timing evidence. On this 12-core machine,
 client saturation still limits peak-capacity conclusions; a separate load-generator
 machine is required before claiming maximum server scaling. No such remote
 capacity or matched-offered-load measurement has been performed by this protocol.
+
+## Latest Results
+
+The [2026-10-06 campaign](https://github.com/c-schembri/weave/releases/tag/benchmarks-20261006-182604)
+passed all 560 timing windows. Default-layout throughput changes for 1,024 x 1 KiB
+were -0.5%, -0.4%, -0.2% and +0.5% at 1/2/4/8 cores, mostly measurement noise.
+The [README](../README.md#local-runtime-benchmarks) retains absolute medians.
+This does not show Weave consistently beating Asio/Tokio.
+
+Shared IOCP versus the **old sharded default** combines layout and runtime changes:
+
+| Cores | Throughput | Server cycles/RTT | P99 | P99.9 |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | +0.3% | -0.3% | +0.2% | -0.8% |
+| 2 | +5.1% | -2.3% | -4.4% | -6.5% |
+| 4 | +12.3% | -4.4% | -8.8% | -8.7% |
+| 8 | -18.2% | -14.4% | +20.1% | +13.1% |
+
+Values are medians of matched ratios, not aggregate-median ratios. Shared improves
+four-core throughput here but regresses at eight; it stays opt-in. Client limits
+affect four/eight-core conclusions. Evidence includes unfavorable results and
+confidence intervals, not just this summary.
+
+## Diagnostic Tracing
+
+Build separately with `WEAVE_TRACE_RUNTIME=ON` and set `WEAVE_TRACE_DIRECTORY`
+to an existing ignored directory. Per-thread PID/TID files hold a memory-mapped
+262,144-entry QPC ring for enqueue/steal/execute/park/wake/submission/completion.
+After all writers exit:
+
+```sh
+python scripts/trace_runtime.py benchmarks/results/trace-DIRECTORY --output benchmarks/results/trace-DIRECTORY/analysis.json
+```
+
+Wrapped history drops old boundaries; process termination can leave unmatched
+begins. Idle IOCP waits are not evidence of stalls. Instrumentation changes costs
+and is never performance evidence. An old 5.8-second timing failure remains in
+[diagnostic evidence](https://github.com/c-schembri/weave/releases/tag/benchmarks-20261006-172307);
+non-reproduction does not identify or prove a fix. Older investigations remain
+in Git history, not an expanding feature backlog.

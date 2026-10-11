@@ -163,6 +163,11 @@
   expiry tests must allow capture across whole-second boundaries, then verify
   expiry without weakening the production lifetime policy.
 - Keep API documentation honest about unsupported features and fatal contracts.
+- Keep README focused on entry-point APIs. Maintain one canonical guide per topic
+  under docs/, linked from docs/README.md; consolidate related contracts instead of
+  adding another checkpoint/qualification diary. Keep security and ownership limits,
+  current reproduction commands and benchmark provenance. Historical investigations
+  belong in Git history or ignored evidence, not duplicated user-facing pages.
 - Do not implement TLS, HTTP parsing, or cryptography from scratch.
 - Do not commit build products or benchmark result artifacts. benchmarks/results/
   is ignored local output; keep curated summaries in docs and publish raw evidence
@@ -224,6 +229,18 @@
   report unsupported native security capabilities explicitly rather than fabricating IDs.
   Windows abstract sockets are currently unsupported pending native qualification;
   do not add a blocking connect fallback or helper threads.
+- PostgreSQL Pool leases return automatically;
+  recycle only after all Connection tasks, callbacks and pipeline/exchange leases
+  have drained. Restore sessions with separate ROLLBACK (when needed) and DISCARD ALL
+  before reuse; do not issue DISCARD inside a transaction or replay application SQL.
+  Clear application observers, queued diagnostics/notifications and resolved LO state
+  between borrowers. Retain cleansing connection credentials only for the pool's
+  reconnect lifetime. Bound connections with cancellation-safe permits, closing
+  discarded sessions before refunding capacity. Pool close wakes acquisitions and
+  closes idle sessions, but neither revokes nor joins current borrowers.
+  A pool is bound to its creating Context/work-stealing domain: affine workers need
+  separate pools. Reject pooled Connection reset and moving a Connection out of its
+  lease; keep Contexts alive until every pool, lease and deferred acquisition drains.
 - PostgreSQL reset requires fresh Options and must reject outstanding session
   Tasks, including deferred Tasks. Keep private borrow leases in coroutine parameters
   before initial suspension and across callbacks/chunked operations. Do not free a
@@ -530,6 +547,12 @@
   contract, even with observers disabled. Hooks select their own state-copy policy;
   allocation failure follows the existing exception-disabled policy, not hook veto.
 - PostgreSQL owning result containers are not exact standard-container types.
+  Row selectors return borrowed checked Fields; indexed/named/handle access,
+  primitive helpers, get<T> and independent readers share one conversion path.
+  Preserve NULL versus conversion failure, validate binary source OIDs/widths,
+  reject ambiguous names and foreign schema handles, and retain immutable wire
+  schemas through streamed Rows, moves and copies. Raw values() access is explicit;
+  it must not make borrowed Fields/readers/views safe across storage mutation.
   Keep owning conversions explicit so lazy const-reference coroutines cannot
   silently borrow conversion temporaries. Prefer string_view/span for borrowed
   boundaries and explicit standard-container copies for owning ones. Text substring
@@ -538,6 +561,15 @@
   exclusive total; it may allocate temporary bookkeeping and requires coordinated
   graph mutation. Foreign pool counters are individually sampled. Keep physical
   footprint separate from logical delivery limits and opaque observer allocations.
+- PostgreSQL struct decoding belongs to record.hpp, included by the module umbrella;
+  keep reflection headers out of primitive-only Row/Connection headers. Automatic
+  mappings use the pinned, namespace-isolated Boost.PFR backend, never a hand-written
+  compiler-signature parser. Struct and cached-decoder members share Field::as<T>
+  semantics; missing optional columns are errors, not NULL. Decoders retain schema
+  identity but never row data, and owned strings/views keep their existing lifetimes.
+  Validate mapping ownership, non-null member pointers and writable primitive types
+  before member access or name extraction, including decoder-only instantiations.
+  Keep explicit RowTraits overrides optional and preserve vendor licensing/provenance.
 - PostgreSQL attach_events is synchronous and uses the supplied idle Connection's
   current registry on an already populated ResultSet. Keep accepted registrations
   even with empty data, retry only absent/rejected IDs and preserve the first failed
@@ -599,6 +631,13 @@
   retain deferred-task leases, and make active stream failures terminal rather
   than racing a sender with Sync recovery. Raw replication is not a WAL decoder
   or durability/acknowledgement policy; callers own those responsibilities.
+- PostgreSQL borrowed input methods keep spans/string_views in their lazy Tasks,
+  without copying them into owning containers. Acquire Connection borrows before
+  initial suspension and keep caller storage alive through completion/cancellation.
+  COPY caller-buffer reads preserve CopyData boundaries, empty messages and EOF;
+  deliver partial messages without allocating a complete payload. Reject owning
+  reads/trace replacement mid-message without closing the session. Application
+  tracing retains only its bounded prefix and emits one complete-message event.
 - PostgreSQL mixed query/COPY exchanges lease one session until explicit synchronous
   finish after ReadyForQuery. Yield owning wire-order events without synthetic command
   tags or implicit WAL acknowledgements. Deferred COPY reads, writes and completion
@@ -653,7 +692,7 @@
   an owner-private regular file. No ambient SSLKEYLOGFILE opt-in, automatic logger,
   secret-path configuration export or silent setup/write failure. Preserve file
   and credential ownership through concurrent handshakes and stream destruction.
-  Require supported security-patched OpenSSL and rerun docs/tls-release.md gates
+  Require supported security-patched OpenSSL and rerun docs/testing.md gates
   for security-sensitive changes; never describe automated tests as a security audit.
   Cleanse owned private-key passphrases on factory validation/provider failures as
   well as identity loading. Best-effort owned-buffer cleansing does not erase

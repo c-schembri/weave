@@ -1,0 +1,7 @@
+foreach(example IN ITEMS borrowed primitives struct)
+  add_executable(postgres_${example} queries/${example}.cpp)
+  target_link_libraries(postgres_${example} PRIVATE weave::postgres)
+  weave_no_exceptions(postgres_${example})
+  set_target_properties(postgres_${example} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/$<CONFIG>")
+  weave_postgres_runtime(postgres_${example})
+endforeach()

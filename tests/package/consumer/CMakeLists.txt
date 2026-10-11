@@ -64,3 +64,36 @@ foreach(header IN LISTS headers)
 endforeach()
 add_library(header_checks OBJECT ${probes})
 target_link_libraries(header_checks PRIVATE weave::${WEAVE_COMPONENT})
+
+if(WEAVE_COMPONENT STREQUAL "postgres")
+  function(check_record_contract case diagnostic)
+    # Compile only: errors must come from installed API validation, not linking.
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+    try_compile(accepted
+      SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/record_contract.cpp"
+      COMPILE_DEFINITIONS "-DWEAVE_RECORD_CONTRACT_CASE=${case}"
+      LINK_LIBRARIES weave::postgres
+      CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON
+      NO_CACHE OUTPUT_VARIABLE output)
+    if(case EQUAL 0)
+      if(NOT accepted)
+        message(FATAL_ERROR "Valid installed row decoder failed to compile: ${output}")
+      endif()
+    else()
+      string(FIND "${output}" "${diagnostic}" found)
+      if(accepted OR found EQUAL -1)
+        message(FATAL_ERROR "Row decoder contract ${case} was not diagnosed correctly: ${output}")
+      endif()
+    endif()
+  endfunction()
+
+  check_record_contract(0 "")
+  check_record_contract(1 "PostgreSQL row mappings cannot contain null member pointers")
+  check_record_contract(2 "RowTraits<T>::fields must be a tuple of fields belonging to T")
+  check_record_contract(3 "RowTraits<T>::fields must be a tuple of fields belonging to T")
+  check_record_contract(4 "PostgreSQL struct members must be writable supported primitives or optionals")
+  check_record_contract(5 "PostgreSQL struct members must be writable supported primitives or optionals")
+  check_record_contract(6 "PostgreSQL automatic row decoding requires a simple aggregate")
+  check_record_contract(7 "deleted")
+  check_record_contract(8 "deleted")
+endif()

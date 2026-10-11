@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+#include "allocations.hpp"
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -35,6 +36,7 @@ struct Metrics {
   std::size_t operations = 0;
   double seconds = 0;
   double cpu = 0;
+  bench::Allocations allocations;
 };
 
 static double process_cpu()
@@ -203,12 +205,19 @@ static weave::Task<void> weave_loop(const Configuration &configuration, Metrics 
   }
   auto statement = sql(configuration);
   std::vector<weave::pg::Parameter> parameters{{"41", 23}};
+  const std::array borrowed_parameters{weave::pg::ParameterView{.data = "41", .type = 23}};
+  bool borrowed = configuration.library == "weave-borrowed";
   bool prepared = configuration.workload == "prepared";
   bool binary = configuration.workload == "binary";
   auto format = binary ? weave::pg::Format::binary : weave::pg::Format::text;
   if (prepared) {
-    std::vector<weave::u32> types{23};
-    co_await connection.prepare("bench", statement, types);
+    if (borrowed) {
+      const std::array<weave::u32, 1> types{23};
+      co_await connection.prepare_borrowed("bench", statement, types);
+    } else {
+      std::vector<weave::u32> types{23};
+      co_await connection.prepare("bench", statement, types);
+    }
   }
 
   std::vector<weave::pg::Command> commands(configuration.batch, {statement, parameters});
@@ -221,6 +230,7 @@ static weave::Task<void> weave_loop(const Configuration &configuration, Metrics 
 
   auto start = Clock::now();
   auto cpu = process_cpu();
+  bench::AllocationSample allocations{std::getenv("WEAVE_PG_COUNT_ALLOCATIONS") != nullptr};
   for (std::size_t index = 0; index < configuration.count; ++index) {
     auto sample = Clock::now();
     std::size_t operations = 1;
@@ -238,6 +248,22 @@ static weave::Task<void> weave_loop(const Configuration &configuration, Metrics 
       }
 
       operations = commands.size();
+    } else if (configuration.workload == "copy_out") {
+      co_await connection.start_copy("COPY (SELECT repeat('x', 4096) FROM generate_series(1, 128)) TO STDOUT");
+      if (borrowed) {
+        std::array<std::byte, 8192> buffer;
+        while (auto received = co_await connection.read_copy(buffer)) {
+          consume(metrics, {reinterpret_cast<const char *>(buffer.data()), received->size}, false);
+          if (!received->end_of_message)
+            co_await weave::fail(std::errc::bad_message);
+        }
+      } else {
+        while (auto received = co_await connection.read_copy())
+          consume(metrics, {reinterpret_cast<const char *>(received->data()), received->size()}, false);
+      }
+      auto result = connection.copy_result();
+      if (!result || result->command != "COPY 128")
+        co_await weave::fail(std::errc::bad_message);
     } else if (configuration.workload == "copy") {
       co_await connection.start_copy("COPY weave_bench FROM STDIN");
       co_await connection.write_copy(std::as_bytes(std::span{copy.data(), copy.size()}));
@@ -247,8 +273,14 @@ static weave::Task<void> weave_loop(const Configuration &configuration, Metrics 
 
       consume(metrics, result.command, false);
     } else {
-      auto result = prepared ? co_await connection.execute_prepared("bench", parameters, format)
-                             : co_await connection.execute(statement, parameters, format);
+      weave::pg::ResultSet result;
+      if (borrowed) {
+        result = prepared ? co_await connection.execute_prepared_borrowed("bench", borrowed_parameters, format)
+                          : co_await connection.execute_borrowed(statement, borrowed_parameters, format);
+      } else {
+        result = prepared ? co_await connection.execute_prepared("bench", parameters, format)
+                          : co_await connection.execute(statement, parameters, format);
+      }
       consume(metrics, result);
     }
 
@@ -257,6 +289,7 @@ static weave::Task<void> weave_loop(const Configuration &configuration, Metrics 
 
   metrics.seconds = std::chrono::duration<double>(Clock::now() - start).count();
   metrics.cpu = process_cpu() - cpu;
+  metrics.allocations = allocations.finish();
   co_await connection.finish();
 }
 
@@ -454,6 +487,21 @@ static bool pq_loop(const Configuration &configuration, Metrics &metrics)
         return false;
 
       operations = configuration.batch;
+    } else if (configuration.workload == "copy_out") {
+      auto *result = PQexec(connection.get(), "COPY (SELECT repeat('x', 4096) FROM generate_series(1, 128)) TO STDOUT");
+      bool copying = result && PQresultStatus(result) == PGRES_COPY_OUT;
+      PQclear(result);
+      if (!copying)
+        return false;
+
+      char *buffer = nullptr;
+      int size = 0;
+      while ((size = PQgetCopyData(connection.get(), &buffer, 0)) > 0) {
+        consume(metrics, {buffer, static_cast<std::size_t>(size)}, false);
+        PQfreemem(buffer);
+      }
+      if (size != -1 || !consume(metrics, PQgetResult(connection.get())) || PQgetResult(connection.get()) != nullptr)
+        return false;
     } else if (configuration.workload == "copy") {
       auto result = PQexec(connection.get(), "COPY weave_bench FROM STDIN");
       bool copying = result && PQresultStatus(result) == PGRES_COPY_IN;
@@ -549,7 +597,9 @@ static int result_memory(const Configuration &configuration)
 int main(int argc, char **argv)
 {
   if (argc != 8) {
-    std::fprintf(stderr, "Usage: compare weave|libpq workload iterations batch host port ca-file-or-plain\n");
+    std::fprintf(
+      stderr,
+      "Usage: compare weave|weave-borrowed|libpq workload iterations batch host port ca-file-or-plain\n");
     return 2;
   }
 
@@ -568,13 +618,17 @@ int main(int argc, char **argv)
     "batch",
     "rows",
     "copy",
+    "copy_out",
     "lo_read",
     "lo_write",
     "lo_append",
     "memory"};
   bool known = std::find(workloads.begin(), workloads.end(), configuration.workload) != workloads.end();
+  bool borrowed_workload = configuration.workload == "extended" || configuration.workload == "prepared" ||
+    configuration.workload == "binary" || configuration.workload == "copy_out";
   if (!count || !*count || !batch || !*batch || *batch > 65535 || !port || !known ||
-    (configuration.library != "weave" && configuration.library != "libpq"))
+    (configuration.library == "weave-borrowed" && !borrowed_workload) ||
+    (configuration.library != "weave" && configuration.library != "weave-borrowed" && configuration.library != "libpq"))
     return 2;
   if (configuration.workload == "lo_append" && *count > 8192)
     return 2;
@@ -614,7 +668,7 @@ int main(int argc, char **argv)
 
   Metrics metrics;
   metrics.latency.reserve(configuration.count);
-  if (configuration.library == "weave") {
+  if (configuration.library != "libpq") {
     auto ctx = weave::Context::create();
     if (!ctx)
       return weave::report_error(ctx.error());
@@ -632,7 +686,8 @@ int main(int argc, char **argv)
   };
   std::printf(
     "{\"operations\":%zu,\"seconds\":%.9f,\"cpu_seconds\":%.9f,\"ops_per_second\":%.3f,"
-    "\"p50_us\":%.3f,\"p95_us\":%.3f,\"p99_us\":%.3f,\"checksum\":%llu,\"libpq_version\":%d}\n",
+    "\"p50_us\":%.3f,\"p95_us\":%.3f,\"p99_us\":%.3f,\"checksum\":%llu,\"libpq_version\":%d,"
+    "\"cpp_allocation_calls\":%zu,\"cpp_requested_bytes\":%zu}\n",
     metrics.operations,
     metrics.seconds,
     metrics.cpu,
@@ -641,5 +696,7 @@ int main(int argc, char **argv)
     percentile(0.95),
     percentile(0.99),
     static_cast<unsigned long long>(metrics.checksum),
-    PQlibVersion());
+    PQlibVersion(),
+    metrics.allocations.calls,
+    metrics.allocations.bytes);
 }

@@ -83,7 +83,7 @@ def timing_build(build):
 
 def source_files():
     directories = ("modules", "test_support", "cmake", "benchmarks/support", "benchmarks/integration", "scripts")
-    files = {ROOT / name for name in ("CMakeLists.txt", "benchmarks/CMakeLists.txt", "docs/gate.md")}
+    files = {ROOT / name for name in ("CMakeLists.txt", "benchmarks/CMakeLists.txt", "docs/benchmarks.md")}
     for directory in directories:
         files.update(path for path in (ROOT / directory).rglob("*")
                      if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc")

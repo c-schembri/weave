@@ -88,6 +88,10 @@ static weave::Task<void> echo_data(weave::TcpStream &socket, std::span<const std
 #endif
 
 #if defined(WEAVE_USE_POSTGRES)
+struct PackageRecord {
+  int id;
+};
+
 static_assert(static_cast<int>(weave::pg::Transaction::idle) == 0);
 static_assert(static_cast<int>(weave::pg::Transaction::active) == 1);
 static_assert(static_cast<int>(weave::pg::Transaction::failed) == 2);
@@ -453,6 +457,19 @@ int main()
 
   if (weave::pg::result_kind_name(weave::pg::ResultKind::tuples) != "tuples")
     return 2;
+
+  weave::pg::ResultSet record_data;
+  record_data.columns.push_back({.name = "id", .type = 23});
+  record_data.rows.push_back({{std::string{"42"}}});
+  auto bound_record = record_data.copy({.observers = false});
+  auto record = bound_record.rows.front().as<PackageRecord>();
+  auto decoder = bound_record.decoder<PackageRecord>();
+  if (!record || record->id != 42 || !decoder)
+    return 2;
+  auto cached_record = decoder->decode(bound_record.rows.front());
+  if (!cached_record || cached_record->id != 42)
+    return 2;
+
   weave::pg::ResultSet columns;
   columns.columns.push_back({.name = "DisplayName"});
   auto column = columns.column_index("\"DisplayName\"");

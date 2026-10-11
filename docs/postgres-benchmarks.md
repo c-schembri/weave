@@ -79,228 +79,151 @@ or throughput advantage.
 | 10,000 | 128 | 5,727,216 | 1,839,320 |
 | 10,000 | 1,024 | 14,687,216 | 10,868,303 |
 
-The [32-connection 1/2/4-worker report](postgres-concurrency.md#latest-native-windows-run-2026-10-10)
-contains the Runtime comparison. [Complete raw evidence](https://github.com/c-schembri/weave/releases/tag/benchmarks-20261010-postgres-final)
-retains every pilot/sample, checksum, source/binary hash, placement and log.
-Measured code is the **uncommitted working tree** based on
-`258683c061d6b66cf55cdefe042959fc10770e30`, not the release tag's source checkout.
-Frozen gate inputs are `61fc3dfc...` (initial) and `2a617a7c...` (missing four-worker
-cells); production benchmark binaries are identical across both.
 
-## Historical Baseline (2026-10-07)
+## Concurrent Runtime Comparison
 
-Measured on 7 October 2026. This is the first native PostgreSQL implementation;
-**before and before/after change are unavailable**, not zero. These results are
-not Weave TCP/Tokio/Asio results and do not establish production qualification.
+32 persistent connections, one/two/four workers, both Weave schedulers with
+sharded I/O. libpq uses one nonblocking poll/WSAPoll loop per worker, fixed
+round-robin session assignment and no Weave runtime. SQL, parameter types,
+checksums and protection policy match. Seven sequential samples alternate all
+order permutations; prepared setup and 32 warmups are untimed.
 
-This page covers serial workloads. See the
-[32-connection Runtime/libpq comparison](postgres-concurrency.md) for
-1/2/4-worker measurements, CPU costs, tail latency and placement limits.
+The same native Windows hardware/provider versions above apply. Two fixed
+physical database cores (including SMT siblings) are separate from client
+workers, each on one logical CPU of a distinct physical core.
+Throughput counts queries/s, or statements/s for a 32-command one-Sync batch.
+Concurrent batch P99 covers the **whole batch**, unlike serial amortized P99.
+Row-heavy queries return 128 integers plus 256-byte text each.
 
-## Linux
+### Four Workers
 
-Release GCC 15.2, Ubuntu 26.04 under WSL2, kernel 6.18.40.1, PostgreSQL/libpq
-18.6, OpenSSL 3.5.5 with distribution security patches, ICU 78.2. The host is a
-Ryzen 9 9900X (12 physical / 24 logical CPUs); this WSL VM exposes 8 logical CPUs.
-One client connection and caller-thread Context, not Runtime scaling. The server
-runs in the same VM. No affinity or exclusive machine reservation was imposed;
-an unrelated user service remained running.
+Throughput is ops/s (statements/s for batches). A = affine, S = work stealing.
+Spread lists A / S / PQ. P99 is a complete query or complete batch through Sync,
+not the amortized serial batch latency. All four-worker throughput spreads are
+below 10%; P99 comparisons marked noisy remain inconclusive independently.
 
-Each implementation ran sequentially, with seven paired samples and alternating
-order. Retained pilots calibrated a common iteration count to approximately one
-second for the slower implementation. All results were consumed and checksums
-matched for every pair. Tables show median throughput, median sample P99, and
-median client-process CPU time / measured wall time. Spread is
-`(maximum - minimum) / median` throughput across all seven samples, not a confidence
-interval. CPU excludes the database server and WSL host/forwarding processes.
-
-### Plaintext SCRAM
-
-| Workload | Weave ops/s | libpq ops/s | Weave / libpq | Spread W / PQ | P99 us W / PQ | CPU % W / PQ |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Connect/authenticate/finish | 555 | 334 | 1.66x | 1.6 / 1.6% | 2290.5 / 3617.8 | 35.1 / 57.4 |
-| Simple SELECT | 9,881 | 10,467 | 0.94x | 3.3 / 3.1% | 180.7 / 169.1 | 45.5 / 38.0 |
-| Extended SELECT | 8,919 | 9,491 | 0.94x | 1.8 / 1.4% | 201.2 / 187.0 | 42.7 / 35.1 |
-| Prepared SELECT | 10,713 | 11,526 | 0.93x | 1.9 / 2.1% | 164.4 / 150.8 | 50.3 / 42.4 |
-| Binary result | 8,933 | 9,518 | 0.94x | 0.7 / 1.0% | 197.6 / 190.9 | 42.7 / 35.6 |
-| Batch, 32 statements | 136,219 | 149,222 | 0.91x | 1.8 / 3.5% | 12.9 / 12.4 | 28.1 / 20.2 |
-| Read 1,000 rows | 1,657 | 1,262 | 1.31x | 7.8 / 9.1% | 1152.0 / 1292.6 | 83.7 / 66.4 |
-| COPY IN, 1,000 rows | 1,179 | 1,195 | 0.99x | 4.3 / 2.1% | 1276.9 / 1201.5 | 11.9 / 9.7 |
-
-### Verified TLS + SCRAM-PLUS
-
-| Workload | Weave ops/s | libpq ops/s | Weave / libpq | Spread W / PQ | P99 us W / PQ | CPU % W / PQ |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Connect/authenticate/finish | 285 | 210 | 1.36x | 0.9 / 3.2% | 4199.0 / 5478.0 | 32.8 / 49.3 |
-| Simple SELECT | 8,435 | 9,078 | 0.93x | 2.5 / 1.6% | 205.8 / 195.6 | 51.1 / 40.3 |
-| Extended SELECT | 7,655 | 8,347 | 0.92x | 2.1 / 2.0% | 228.3 / 211.7 | 48.4 / 37.5 |
-| Prepared SELECT | 8,954 | 9,902 | 0.90x | 1.1 / 3.9% | 192.5 / 178.5 | 55.9 / 44.2 |
-| Binary result | 7,714 | 8,327 | 0.93x | 2.0 / 2.7% | 228.1 / 213.0 | 48.7 / 37.6 |
-| Batch, 32 statements | 125,490 | 138,784 | 0.90x | 1.1 / 2.8% | 13.6 / 13.1 | 31.8 / 22.6 |
-| Read 1,000 rows | 1,467 | 1,131 | 1.30x | 3.0 / 10.1% | 1253.0 / 1464.2 | 85.4 / 67.6 |
-| COPY IN, 1,000 rows | 1,135 | 1,149 | 0.99x | 2.1 / 1.9% | 1267.8 / 1299.5 | 15.9 / 11.5 |
-
-Ordinary queries are slower and consume more client CPU than libpq in this
-baseline. Connect and large row reads are faster; the row comparison has wider
-spread, especially libpq with TLS. No uniform performance advantage is claimed.
-
-## Windows Clients
-
-Native MSVC 19.44 Release clients, OpenSSL 3.6.5, ICU 78.3, libpq 18.4 from the
-pinned vcpkg snapshot. The database remains PostgreSQL 18.6 in WSL, reached via
-Windows localhost forwarding. This is **not a native Windows database-server
-benchmark** and must not be compared directly to Linux throughput as a backend
-performance claim. Same seven-pair protocol, SQL, consumption and TLS policy.
-
-### Plaintext SCRAM
-
-| Workload | Weave ops/s | libpq ops/s | Weave / libpq | Spread W / PQ | P99 us W / PQ |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Connect/authenticate/finish | 265 | 66 | 4.03x | 5.9 / 6.9% | 4706.6 / 26390.9 |
-| Simple SELECT | 4,555 | 4,622 | 0.99x | 3.1 / 2.5% | 318.3 / 318.7 |
-| Extended SELECT | 4,225 | 4,358 | 0.97x | 3.0 / 5.6% | 346.6 / 332.2 |
-| Prepared SELECT | 4,663 | 4,809 | 0.97x | 3.3 / 3.0% | 312.8 / 294.6 |
-| Binary result | 4,264 | 4,423 | 0.96x | 6.2 / 1.9% | 335.4 / 332.8 |
-| Batch, 32 statements | 82,430 | 93,830 | 0.88x | 4.7 / 3.1% | 17.4 / 16.2 |
-| Read 1,000 rows, inconclusive | 687 | 910 | 0.75x | 60.1 / 57.3% | 1260.9 / 1004.2 |
-| COPY IN, 1,000 rows | 23 | 23 | 1.00x | 0.8 / 0.8% | 44362.9 / 44402.1 |
-
-### Verified TLS + SCRAM-PLUS
-
-| Workload | Weave ops/s | libpq ops/s | Weave / libpq | Spread W / PQ | P99 us W / PQ |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Connect/authenticate/finish | 21 | 16 | 1.28x | 3.7 / 4.4% | 51429.7 / 71781.5 |
-| Simple SELECT | 4,058 | 4,214 | 0.96x | 3.0 / 3.0% | 345.1 / 333.3 |
-| Extended SELECT | 3,928 | 4,015 | 0.98x | 2.5 / 4.2% | 353.7 / 358.9 |
-| Prepared SELECT | 4,286 | 4,453 | 0.96x | 3.9 / 4.3% | 334.7 / 328.0 |
-| Binary result | 3,892 | 4,026 | 0.97x | 2.3 / 2.7% | 364.3 / 352.3 |
-| Batch, 32 statements | 78,118 | 89,617 | 0.87x | 2.7 / 4.1% | 18.5 / 16.6 |
-| Read 1,000 rows, inconclusive | 403 | 621 | 0.65x | 86.7 / 83.6% | 1533.1 / 1271.8 |
-| COPY IN, 1,000 rows | 23 | 23 | 1.00x | 0.3 / 0.8% | 44330.4 / 44351.6 |
-
-Windows row throughput is too variable to rank the clients. Approximately 44 ms
-COPY P99 and much slower connection setup are observations of this cross-OS
-path; their cause has not been isolated. Neither is attributed to a particular
-library or used as an IOCP advantage claim. Windows GetProcessTimes readings
-often reported zero over these samples. Subsequent concurrent-workload controls
-confirmed underreporting with independent process sampling; the cause is not
-isolated. Raw CPU measurements are retained, but cannot establish zero CPU cost
-or rank CPU efficiency. The concurrent comparison reports raw cycles separately.
-
-## Large Objects
-
-Seven matched pairs per workload, calibrated to two seconds rather than one.
-Same hardware, builds and transport policy as above. One operation seeks then
-transfers 64 KiB through native FunctionCall messages. Both libraries reuse a
-caller-owned receive buffer; reads verify and checksum every byte. Setup,
-catalog lookup, final content verification and rollback are outside timing.
-Before/change remain unavailable for this new module.
-
-| Client / transport | Workload | Weave ops/s | libpq ops/s | W / PQ | Spread W / PQ | P99 us W / PQ |
+| Transport | Workload | A | S | libpq | A / S vs PQ | Spread % A / S / PQ |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| Linux / plaintext | Read | 3,590 | 4,124 | 0.87x | 1.9 / 2.2% | 457.9 / 403.1 |
-| Linux / plaintext | Overwrite | 109 | 112 | 0.98x | 1.6 / 3.5% | 19319.5 / 19100.0 |
-| Linux / plaintext | Append, inconclusive | 2,003 | 2,103 | 0.95x | 36.7 / 8.9% | 762.8 / 709.6 |
-| Linux / TLS | Read | 3,082 | 3,345 | 0.92x | 3.2 / 2.8% | 623.4 / 627.1 |
-| Linux / TLS | Append, inconclusive | 1,576 | 2,040 | 0.77x | 19.1 / 51.4% | 1079.7 / 798.7 |
-| Windows / plaintext | Read | 1,903 | 2,011 | 0.95x | 5.4 / 2.8% | 646.1 / 641.1 |
-| Windows / plaintext | Append | 23 | 23 | 1.00x | 0.8 / 2.1% | 45125.3 / 44544.0 |
-| Windows / TLS | Read | 1,642 | 1,853 | 0.89x | 2.2 / 3.2% | 740.3 / 660.5 |
-| Windows / TLS | Append | 23 | 23 | 1.00x | 2.7 / 2.7% | 44416.6 / 44504.4 |
+| Plain | Simple | 105,239 | 108,303 | 114,188 | 0.92 / 0.94x | 4.8 / 2.9 / 2.5 |
+| Plain | Prepared | 113,959 | 112,678 | 123,078 | 0.93 / 0.92x | 3.1 / 4.4 / 2.8 |
+| Plain | Batch | 528,713 | 527,864 | 535,137 | 0.99 / 1.00x | 1.9 / 3.4 / 5.0 |
+| Plain | Rows | 27,897 | 27,473 | 33,266 | 0.84 / 0.83x | 7.9 / 4.8 / 3.0 |
+| TLS | Simple | 91,606 | 92,526 | 95,791 | 0.95 / 0.97x | 3.2 / 3.5 / 2.3 |
+| TLS | Prepared | 97,302 | 97,481 | 102,172 | 0.95 / 0.95x | 5.0 / 3.2 / 3.0 |
+| TLS | Batch | 470,737 | 468,698 | 470,659 | 1.00 / 0.99x | 5.9 / 7.5 / 4.2 |
+| TLS | Rows | 11,214 | 11,233 | 11,309 | 1.00 / 1.00x | 2.3 / 2.7 / 2.0 |
 
-Reads are slower than libpq in these runs. Linux append throughput is too
-variable to rank. Native Windows clients again encounter approximately 44 ms
-write latency on the WSL-forwarded path; the cause is not isolated. No samples
-were discarded or selectively rerun. Windows CPU time remains unreliable.
+| Transport | Workload | P99 us A / S / PQ | Comparable A / S to PQ |
+| --- | --- | ---: | --- |
+| Plain | Simple | 403.8 / 438.1 / 382.9 | No / No: baseline noisy |
+| Plain | Prepared | 367.1 / 496.3 / 335.2 | Yes / No: S noisy |
+| Plain | Batch | 2523.5 / 3455.3 / 6808.6 | No / No: both candidates noisy |
+| Plain | Rows | 1912.0 / 5572.0 / 1351.2 | No / No: baseline noisy |
+| TLS | Simple | 484.1 / 480.4 / 421.1 | Yes / No: S noisy |
+| TLS | Prepared | 437.0 / 482.7 / 425.5 | No / No: baseline noisy |
+| TLS | Batch | 2796.1 / 5887.6 / 9347.3 | No / No: all noisy |
+| TLS | Rows | 16481.5 / 16553.2 / 21627.2 | No / No: all noisy |
 
-Linux client CPU percentages W / PQ: plaintext read 59.6 / 55.4, overwrite
-2.5 / 1.2, append 31.6 / 17.5; TLS read 65.7 / 57.7, append 50.4 / 28.6.
-These exclude server CPU and do not establish server capacity or durability.
 
-`lo_write` repeatedly overwrites the same object pages in one transaction.
-Increasing write cost made the pilot underestimate measured durations: the
-completed plaintext sweep took substantially longer than two seconds per sample.
-Its full results are retained, not replaced by the append numbers. `lo_append`
-seeks to successive 64 KiB offsets, bounded to 8,192 operations / 512 MiB per
-sample. Both are uncommitted writes followed by rollback, not durable disk
-throughput. Only the plaintext Linux overwrite sweep was run; the other sweeps
-measure read and append.
-
-## Workload boundaries
-
-- Connect includes startup, authentication and graceful finish. Weave reuses an
-  immutable TLS credential snapshot; libpq's public connect API constructs its
-  TLS state per connection. This measures those APIs' setup costs, not just IOCP
-  or io_uring performance.
-- Ordinary queries use `SELECT 42` or a bound integer parameter plus one. Prepared
-  setup and ordinary connection setup are outside the measured loop. Binary mode
-  changes result representation, not the SQL or consumed values.
-- Batch uses 32 extended statements and one final Sync on both clients. Throughput
-  is statements/s. Batch P99 is **amortized batch time per statement**, not the
-  latency distribution of individual pipelined statements.
-- Rows returns 1,000 integers and 256-byte payloads per query. Throughput counts
-  queries/s, not rows/s. Both clients retain and consume complete results.
-- COPY sends 1,000 text rows to a connection-private temporary table per operation.
-  Table creation is outside timing; the table grows identically during a sample.
-  Throughput counts COPY operations/s, not rows/s.
-- These are serial baselines. They do not measure concurrent clients, runtime
-  worker scaling, cancellation storms, slow peers or database durability under load.
+CPU time is unavailable for ranking; raw cycles are not utilization.
+The fixed database budget can saturate. These are closed-loop client comparisons,
+not unconstrained database/client scaling, durable WAL throughput or a uniform
+Weave win. P99 spread above 30% is inconclusive independently of throughput.
+Throughput spread above 10%, or windows shorter than 75% of their declared target,
+are also inconclusive for the affected metric. Keep every sample and failure.
 
 ## Reproduce
 
-Build with `WEAVE_POSTGRES_BENCHMARKS=ON` and a private libpq development
-dependency. Set `WEAVE_PG_PASSWORD` in the environment. Use a dedicated test
-database and run outside builds/tests and correctness CI:
+Build with `WEAVE_POSTGRES_BENCHMARKS=ON`, a private libpq 18+ development
+dependency, and `WEAVE_MODULES="postgres;runtime"` for concurrent measurements.
+Keep general benchmark suites off when only PG is needed. Use a dedicated test
+database/login and set `WEAVE_PG_PASSWORD`; never commit credentials.
 
 ```text
 python modules/postgres/benchmarks/run.py --executable <Release benchmark> \
   --host 127.0.0.1 --port 55432 --ca <trusted CA file or plain> \
-  --seconds 1 --repetitions 7 --output <new ignored evidence path>
+  --seconds 2 --repetitions 7 --output <new ignored path>
+
+python modules/postgres/benchmarks/run_concurrent.py \
+  --executable <Release weave_postgres_concurrent> \
+  --workers 1 2 4 --connections 32 --reserve-cores 2 \
+  --seconds 2 --repetitions 7 --ca <trusted CA file or plain> \
+  --server-description <actual placement> --output <new ignored path>
 ```
 
-Use `--workloads lo_read lo_append --seconds 2` for the bounded large-object
-comparison. Select `lo_write` explicitly for the slower overwrite workload.
+The runner's core reservation constrains client placement, not database affinity.
+Document server placement separately. Connect includes authentication/finish;
+Weave reuses credentials while libpq constructs TLS state per public connect.
+COPY inserts 1,000 text rows into a connection-private temporary table;
+large-object reads/overwrite/append transfer 64 KiB, without durable commits.
+These API/setup/storage differences must not be attributed solely to IOCP/io_uring.
 
-No samples or outliers are discarded. The driver refuses to overwrite evidence,
-retains failures and validates consumed-result checksums. Source changes during
-measurement make the run diagnostic-only. Longer samples and a native Windows
-server are needed before relying on the noisy Windows cases.
+Drivers refuse evidence overwrite and validate consumed values/checksums.
+Source changes make a run diagnostic-only. Native performance suites are manual;
+correctness CI tests only their synthetic analyzer/process controls.
+Pooling was added later and is **not measured by these results**.
+
+### Borrowed Inputs And COPY Buffers
+
+The separate manual `modules/postgres/benchmarks/buffers.py` comparison measures
+owning/borrowed extended, prepared and binary queries plus COPY output against
+libpq on an owned Windows cluster. It reserves two server cores and one separate
+client core, rotates sequential execution order and checks consumed-data hashes.
+Supply `--executable`, `--topology-executable` (the concurrent benchmark),
+`--server-bin`, a new ignored `--output` path, and optionally `--before` for a
+saved pre-change executable. Defaults are seven repetitions and a one-second
+sample target: warmup precedes larger pilots, then all variants share a fixed
+count targeting the fastest pilot plus 10%. Samples below 80% of the target are
+marked short, never selectively retried. COPY output has
+no pre-change timing cell unless that executable supported the workload.
+
+Separate instrumented runs report driving-thread C++ `new` requests and requested
+bytes per operation. These exclude C/DLL allocators, OpenSSL/ICU/libpq internals,
+allocator-reserved memory and RSS. They are not total allocation counts or used
+for throughput ranking. CPU readings retain the existing Windows resolution
+limitation. These results must not be mixed with the older tables above.
+
+Local Windows Release measurements on 2026-10-11 used a Ryzen 9 9900X,
+PostgreSQL 16.4, libpq 18.4, plaintext TCP and one Context. Seven sequential
+samples per variant retained all outliers. **Timing comparisons are inconclusive**:
+rate spreads were 4.6-274.6%; the prepared workload also flagged a shortest sample
+of 0.743 seconds. The apparent binary-query speedup is noise, not a claimed win.
+
+| Workload | Before ops/s | Borrowed ops/s | Raw change | libpq ops/s | Spread before / borrowed / libpq |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Extended | 8,786 | 8,719 | -0.8% | 9,473 | 162.6% / 187.7% / 162.2% |
+| Prepared | 26,862 | 27,137 | +1.0% | 27,858 | 31.3% / 6.9% / 6.0% |
+| Binary | 6,662 | 24,117 | +262.0% | 25,053 | 274.6% / 74.2% / 75.2% |
+| COPY output | unavailable | 921 | unavailable | 978 | unavailable / 37.4% / 4.6% |
+
+Separate 256-operation passes confirmed fewer C++ allocation requests:
+
+| Workload | Current owning calls/op | Borrowed calls/op | Reduction | Requested bytes/op owning / borrowed |
+| --- | ---: | ---: | ---: | ---: |
+| Extended | 43 | 40 | 7.0% | 7,684 / 6,548 |
+| Prepared | 36 | 34 | 5.6% | 7,507 / 6,403 |
+| Binary | 43 | 40 | 7.0% | 7,686 / 6,550 |
+| COPY output (128 rows of 4,097 bytes) | 403 | 275 | 31.8% | 982,708 / 434,724 |
+
+Unpublished local evidence is `benchmarks/results/buffers-duration-20261011.json`,
+SHA-256 `f9c0940259be02ad3c598398ad30d1b311391ada62d6fb7fb7fcabcbf908d7b4`.
+Earlier short-pilot diagnostic runs remain alongside it, not overwritten or merged.
+Allocation savings are not proof of throughput gains or a performance-parity gate.
 
 ## Provenance
 
-The measured source was uncommitted on top of `258683c`. Subsequent parity work
-is not silently included in this baseline. Source fingerprint:
-`ddab3f5051a07067c518ba953591fdf161415d82419ed25bee75d8dea0e520cf` on Linux,
-`0a62a1432c17dbd72ab3a214fa04361cf28ab0be72a629862eaf1ed65f698a8c` on Windows.
-The original driver sorted native Path objects, whose ordering differs by OS;
-both runs read the same shared source tree and validated their own start/end
-fingerprint. A local source/build-input snapshot is retained as
-`postgres-source-20261007.zip`, SHA-256
-`6678ae667908b30cb5f42d06dfe29bcd1b51d98f93ff480371ed597d0bdce499`.
-Raw evidence is ignored local output, not tracked Git data or uploaded release
-assets. Each completed sweep retains 128 records (16 pilots, 112 samples).
+[Complete raw evidence](https://github.com/c-schembri/weave/releases/tag/benchmarks-20261010-postgres-final)
+retains pilots, samples, source/binary hashes, placement and logs.
+Asset SHA-256: `051b66ba58b15520bcb19b3c622c740bbfa4d7b843b5813cad876225b929c77c`.
 
-| Evidence | SHA-256 |
-| --- | --- |
-| postgres-linux-plain-20261007.json | 04551d571d8f36290646ad90db2ec66ece7e29ac185cbadb44e205095e0199af |
-| postgres-linux-tls-20261007.json | 7d6db6862a7e7ea488e6a86150055325dc0b092182616c7913e8b713126689e3 |
-| postgres-windows-plain-20261007.json | 2d5f377908b3c4412c3c358d437ecbccb14f70163ca2911d6673e3031d8ce783 |
-| postgres-windows-tls-20261007.json | 1bd3431f4f016e9f9826cd071517e58ed73891aed2ab93873bd53d39e2cfa7e2 |
+Measured code was an **uncommitted working tree** based on
+`258683c061d6b66cf55cdefe042959fc10770e30`, not the release tag's checkout.
+Initial inputs `61fc3dfc...` accidentally double-reserved client cores and
+omitted four-worker cells. Corrected inputs `2a617a7c...` measured only those
+missing cells; identical production binaries were used. Existing one/two-worker
+samples were preserved, not replaced for favorable results.
 
-Large-object source fingerprint was
-`d0e4a946c085541890deb945730617f993ee1304c71fe830c7699ebd3043ef85`
-for the first read/overwrite sweep. Adding the bounded append workload changed
-only the comparison/harness sources, yielding the common Windows/Linux fingerprint
-`abd135cfe838aed07f9c5733df9c95b3de6e680e7efc95cd2ed5df8eabc62aa7`.
-All five sweeps completed with matching checksums and unchanged start/end source.
-Each JSON records its executable hash. Local source snapshots:
-
-| Snapshot / evidence | SHA-256 |
-| --- | --- |
-| postgres-large-objects-source-20261007.zip | 1ee258b0ca1b149fa84e14406287dc3a99cab22064175e028640a86787058b3b |
-| postgres-lo-append-source-20261007.zip | b511d9de1e49509945a97ebc46da371e3fe3a474180f3c3bae0b804994bd56ac |
-| postgres-lo-linux-plain-20261007.json | 70ee4ca41154c2bb84aad0ac549117527c04cc2bb19f3025b4f11db586cfdd62 |
-| postgres-lo-linux-append-20261007.json | 79e594e547b092587e636679196cbb181849ada747122e4928b0322f5220039f |
-| postgres-lo-linux-tls-20261007.json | 299c0487379b6ca0c46a051dd64c28d400a13803c15d36bc82bedf151d2bdf52 |
-| postgres-lo-windows-plain-20261007.json | f91455a7289db8cd3825d321ed6c98070460d3dec65efa0718c08ae7c27c0149 |
-| postgres-lo-windows-tls-20261007.json | 3fef62db8c03acb46b03f67c82954e1cf886125af280fbaa11779decf3d1308b |
+[Earlier Linux and WSL-forwarded baselines](https://github.com/c-schembri/weave/blob/4f24d614b31708b10007072b2b9e6aa323249bad/docs/postgres-benchmarks.md)
+and [earlier concurrent tables](https://github.com/c-schembri/weave/blob/4f24d614b31708b10007072b2b9e6aa323249bad/docs/postgres-concurrency.md)
+remain in Git history. They have different placement/source provenance and must
+not be silently merged with the native Windows run.

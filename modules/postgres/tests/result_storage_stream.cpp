@@ -53,17 +53,17 @@ struct Observations {
       check(row[0].bytes() == std::to_string(++rows));
       check(row[1].bytes() == std::string(120, 'x'));
       check(row.get_allocator().arena().identity() == arena.identity());
-      check(row[1].data->get_allocator().arena().identity() == arena.identity());
+      check(row.values()[1].data->get_allocator().arena().identity() == arena.identity());
     }
     auto copy = result.copy();
     check(copy.rows.size() == result.rows.size() && copy.memory_size() > 0);
     for (std::size_t index = 0; index != result.rows.size(); ++index) {
       for (std::size_t field = 0; field != 3; ++field)
-        check(copy.rows[index][field].data == result.rows[index][field].data);
+        check(copy.rows[index].values()[field].data == result.rows[index].values()[field].data);
     }
     check(copy.rows.get_allocator().arena().identity() != arena.identity());
     if (!escaped)
-      escaped.emplace(std::move(*result.rows[0][1].data));
+      escaped.emplace(std::move(*result.rows[0].values()[1].data));
     ++chunks;
   }
 

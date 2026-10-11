@@ -7,6 +7,13 @@ namespace weave::detail {
 struct IoDomain;
 
 struct ContextAccess {
+  static void check_thread(const Context &context) noexcept
+  {
+    context.check_thread();
+  }
+
+  static void check_execution(const Context &context) noexcept;
+
   static Result<void> submit(Context &context, SpawnBase &task)
   {
     return context.submit(task);

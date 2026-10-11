@@ -1,15 +1,15 @@
 # PostgreSQL
 
-The optional `weave::postgres` module implements PostgreSQL's wire protocol;
-it does not wrap or link libpq. Its authentication uses OpenSSL Crypto and ICU
-SASLprep. It depends on TLS, TCP, IO and Sync, not Runtime.
+Weave implements PostgreSQL's wire protocol directly; it does not wrap or link
+libpq. Include `<weave/postgres.hpp>` and link `weave::postgres`.
+OpenSSL Crypto and ICU implement authentication primitives and SASLprep.
+Runtime is optional.
 
-The implemented scope is experimental. The [closed checkpoint](postgres-release.md)
-and [parity checklist](postgres-parity.md) define its scope, not complete libpq compatibility.
-The [individual API audit](postgres-api-audit.md) records concrete mappings and gaps.
-The [latest libpq measurements](postgres-benchmarks.md) record throughput, CPU,
-tail latency and its measurement limitations separately from correctness gates.
-[Current validation and scope](postgres-closure.md) / [historical qualification and local gates](postgres-qualification.md).
+The module is experimental, not drop-in libpq or independently security audited.
+See the [API mapping](postgres-api-audit.md), [validation boundaries](testing.md)
+and [matched libpq measurements](postgres-benchmarks.md).
+
+## Queries
 
 ```cpp
 #include <weave/postgres.hpp>
@@ -24,8 +24,9 @@ weave::Task<void> example()
   });
 
   std::vector<weave::pg::Parameter> parameters{{"42", 23}};
-  auto rows = co_await database.execute("SELECT $1::int", parameters);
-  auto number = rows.rows.front().front().integer<int>();
+  auto result = co_await database.execute("SELECT $1::int", parameters);
+
+  auto number = result.rows.front().get<int>(0);
   if (!number)
     co_await weave::fail(number.error());
 
@@ -33,213 +34,251 @@ weave::Task<void> example()
 }
 ```
 
-TLS is verified by default. Set `Options::tls` to an immutable client credential
-snapshot for private CAs or mTLS. Ordinary defaults never fall back to
-unauthenticated transport; [weaker TLS modes](postgres-connections.md#tls-modes)
-require explicit opt-in and retain their documented fallback restrictions.
-`plaintext = true` explicitly opts into unencrypted transport; it is intended
-for trusted local deployments and matched benchmarks. Cleartext password
-authentication requires verified TLS and an explicit opt-in; deprecated MD5
-authentication also requires an explicit opt-in. SCRAM-SHA-256 and
-SCRAM-SHA-256-PLUS verify the server proof. `ChannelBinding::require` rejects
-non-SCRAM and non-bound authentication, including trust authentication.
+Run this Task with [Context or Runtime](execution.md). TLS verifies the server's
+chain and DNS/IP identity by default. Supply `Options::tls` for private CAs or
+mTLS; weaker modes require explicit opt-in.
+[Connection configuration and authentication](postgres-connections.md).
 
-`query` accepts simple SQL and returns every result set, including multiple
-statements. `execute` uses Parse/Bind/Describe/Execute with owned text, binary or
-NULL parameters. `prepare`, `execute_prepared`, `describe` and `close_prepared`
-expose named prepared statements. Column metadata includes OIDs and formats;
-`Value::integer` decodes **text** integers only; `binary_integer<T>` explicitly
-decodes a network-order integer of matching width. Binary bytes are not silently
-interpreted as text. SQLSTATE is preserved in the error category, while
-`last_error()` retains the server diagnostic fields on a surviving connection.
-`last_failure()` returns an owning, synchronous snapshot of the admitted
-operation's local/SQL cause and retained diagnostic, including after transport
-closure. Inspect it only after session Tasks and leases have drained;
-[failure scope and formatting](postgres-diagnostics.md#session-failures).
-`ResultSet::kind` distinguishes commands, tuple results, empty queries,
-descriptions and partial chunks independently of row count. For owning SQL
-failure data, use `query_outcomes`, `execute_outcome` or `execute_prepared_outcome`;
-the blocking facade provides the same methods. Default query/execute methods
-still propagate SQL errors through Task/Result.
-[Result kinds, ownership and retained diagnostics](postgres-results.md).
-For startup failures, `connect(options, diagnostic)` fills a caller-owned
-`Diagnostic`; keep it alive through the await. Transport failures leave it empty.
+| API | Purpose |
+| --- | --- |
+| `query` | Simple SQL; all result sets, including multiple statements |
+| `execute` | Extended query with owned text, binary or NULL parameters |
+| `prepare`, `execute_prepared`, `describe`, `close_prepared` | Named prepared statements |
+| `query_outcomes`, `execute_outcome`, `execute_prepared_outcome` | Owning successes and SQL diagnostics without automatic SQL-error propagation |
+| `call_function` | Legacy FunctionCall by server-resolved OID; parameter types must be zero |
+| `batch`, `pipeline` | Correlated commands and explicit synchronization barriers |
 
-`call_function(oid, parameters, format)` implements PostgreSQL's legacy fast-path
-FunctionCall protocol and returns an owning, nullable `Value`. Argument types
-come from the server function, so `Parameter::type` must be zero on this path;
-text/binary formats still apply. Resolve application function OIDs through a
-query rather than assuming that extension OIDs match between databases. SQL
-errors drain through ReadyForQuery just like ordinary queries.
+Default query methods propagate SQL failures through `Task`. Outcome methods
+return SQL failures as owning values; transport, cancellation, resource and
+protocol errors still fail the Task. A simple query stops at its first SQL
+error; unexecuted statements do not get fabricated results.
 
-Prefer bound parameters for data values. Where SQL construction really needs
-quoting, synchronous `escape_literal` and `escape_identifier` validate the current client encoding,
-reject embedded NUL/invalid sequences and return fully quoted strings. Literal
-quoting uses explicit escape-string syntax, independent of
-`standard_conforming_strings`. Complete multibyte characters retain their
-continuation bytes; the helpers are not generic encoding converters.
-`encode_bytea` produces PostgreSQL hex text (not a SQL literal);
-`decode_bytea` accepts hex and legacy octal/backslash representations. Both own
-their output and enforce an explicit output-size limit. Do not double-escape
-values passed through query parameters.
-Keep the client encoding unchanged between quoting and executing the resulting SQL.
-[Encoding control, validation and quoting policies](postgres-encoding.md).
+Results own rows, column OIDs/formats and command tags. Fields support checked
+`as<T>()`, `row.get<T>(index/name)`, primitive helpers and independent sequential
+readers in either text or binary mode. `Value::integer<T>()` and
+`binary_integer<T>()` remain explicit low-level wire-format decoders.
+NULL is distinct from an empty value. Results survive later queries and
+connection destruction. [Results, formatting and storage](postgres-observability.md#results).
 
-`change_password(user, password)` generates a verifier and changes the password
-without putting plaintext into SQL. Synchronous and connection-policy verifier
-utilities are also available. [Password policy, ownership and failure](postgres-passwords.md).
+```cpp
+const auto &row = result.rows.front(); // Check for an empty result first.
+auto weight = row["weight"].as<double>();
+auto delivered = row.get<bool>("delivered");
+auto notes = row["notes"].optional<std::string_view>();
 
-Synchronous `info()` returns an owning snapshot of the selected destination,
-login/database, negotiated protocol, transaction state and actual TLS/GSS
-transport. It requires an idle session and exports no secrets or native handles.
-[Metadata fields, lifetime and compatibility](postgres-metadata.md).
+auto fields = row.reader();
+auto id = fields.next<weave::i64>();
+auto quantity = fields.next().integer<int>();
+```
 
-`pg::lo` provides transaction-bound large-object operations, including 64-bit
-positions and checked client-file import/export on the blocking facade.
-[Large-object APIs and ownership](postgres-large-objects.md).
+Every conversion returns a synchronous `Result<T>`. Check it before use; inside
+a Task, propagate failure with `co_await weave::fail(value.error())`. See the
+[complete primitive example](../modules/postgres/examples/queries/primitives.cpp)
+(`postgres_primitives`) and [conversion contracts](postgres-observability.md#primitive-access).
 
-`Options.hosts` selects destinations, with optional ordered/random traversal and numeric address
-pinning. `target_session` selects writable/read-only, primary/standby or preferred
-standby sessions. `reset(options)` explicitly replaces a session without replaying
-SQL or retaining its old authentication password.
-`Options::parse` synchronously accepts a documented URI/keyword subset without
-environment or file access. Explicit `Options::load` resolves environment,
-service and per-host password files during setup.
-[Connection strings, configuration loading, selection and reset](postgres-connections.md).
+For structs, member names select columns automatically; no registration is needed:
 
-`batch` pipelines extended queries with one final Sync. It sends and receives
-concurrently to avoid socket-buffer deadlocks. A SQL error is returned in that
-command's `Outcome`; subsequent commands are marked `aborted` until Sync.
-Earlier successful results remain available. PostgreSQL transaction semantics
-still apply: successful commands in an implicit pipeline transaction may roll
-back when a later command fails. No automatic retry is performed.
+```cpp
+struct Shipment {
+  weave::i64 id;
+  double weight;
+  std::string recipient;
+};
 
-`pipeline()` reserves an explicitly managed extended-protocol session. Queue
-commands and Sync barriers synchronously, `co_await flush()` for duplex progress,
-and consume correlated owning results with `next()` or synchronous `try_next()`.
-`finish()` releases it after synchronization, result draining and Task cleanup.
-[Pipeline boundaries, incremental row chunks, recovery and ownership](postgres-pipelines.md).
+auto shipment = row.as<Shipment>(); // Result<Shipment>
+```
 
-COPY uses `start_copy`, `write_copy` / `read_copy` and `end_copy`. Reads own each
-returned chunk; write spans must survive their await. Ordinary COPY OUT returns
-an empty optional after CommandComplete and ReadyForQuery; `copy_result` then
-exposes the command tag. COPY IN `end_copy(message)` sends CopyFail and drains
-the server error. Other commands are rejected while COPY is active.
+Use `result.decoder<Shipment>()` to bind column indices once for repeated rows.
+See the [complete struct example](../modules/postgres/examples/queries/struct.cpp)
+(`postgres_struct`) and [struct conversion contracts](postgres-observability.md#struct-access).
 
-Explicit replication startup and raw COPY BOTH support independent sending and
-receiving. `finish_copy_send` closes only the send direction; receive EOF closes
-only the receive direction. `end_copy` drains the terminal `copy_results` before
-connection reuse. [Replication transport and remaining limits](postgres-replication.md).
+## Borrowed Inputs
 
-Mixed result/COPY commands use the [owning exchange-stream API](postgres-exchanges.md).
-It preserves owning events and explicit phase boundaries rather than hiding
-backup metadata or collecting unbounded raw streams.
+See the complete [runnable example](../modules/postgres/examples/queries/borrowed.cpp)
+(`postgres_borrowed`, built with `WEAVE_BUILD_EXAMPLES=ON`). Pass a connection
+string as its optional argument, or use the sources loaded by `Options::load`.
+TLS verification stays enabled by default.
 
-`request_cancel` sends a PostgreSQL CancelRequest through a separate connection
-to the selected server endpoint. Calling it captures an owning backend snapshot
-immediately; the lazy Task does not borrow the query Connection. Reset, move,
-finish or destruction cannot retarget an already-created cancellation Task.
-Calling it on a closed connection creates a Task that fails with `Error::closed`,
-even if that connection is reset before the Task runs.
-There is no success acknowledgement or rollback guarantee: the command might
-already have completed. Await the original command and inspect its result.
-`cancel()` instead cancels transport work and makes the connection terminal.
+The owning methods retain SQL and parameters in their lazy Tasks. For hot paths,
+`execute_borrowed` accepts SQL as `string_view` and an allocation-free parameter
+span. C arrays, `std::array` and existing vectors all work:
 
-Connections and inspection methods are single-execution-owner objects, not
-thread-safe shared sessions. Concurrent ordinary commands fail with `busy`.
-Connection moves/destruction require no active operations; the Connection and
-its Context must outlive every task borrowing them. PostgreSQL cancellation is
-the exceptional independent operation, not a second query reader. Obtain an
-owning `cancel_handle()` before sharing cancellation across threads; its
-`request()` owns the snapshot even after the handle is destroyed, while
-`request_blocking()` drives a separate calling-thread Context. Copying a handle
-shares immutable cancellation credentials, not the query Connection.
-The blocking method must run outside an executing Context. Requesting through a
-moved-from CancelHandle is a fatal contract violation. Independent requests may
-run concurrently on separate execution owners; they never read the query stream.
-[Cancellation deadlines, transport and snapshot boundaries](postgres-connections.md#cancellation).
-Moved-from connections support destruction, `open`, `close` and `cancel`;
-`info()`, `cancel_handle()` and `request_cancel()` report `Error::closed`. Other operations
-require a live implementation and fail the contract immediately.
+```cpp
+const std::array parameters{
+  weave::pg::ParameterView{.data = "42", .type = 23}
+};
 
-Ordinary SQL errors drain ReadyForQuery before propagation, preserving connection reuse.
-Errors during active COPY BOTH are terminal; its separate sender may still be active.
-Transport errors, malformed messages, resource-limit failures and task-token
-cancellation after an exchange begins close the connection rather than leave a
-half-consumed protocol reusable. `as_result` can recover from SQL errors; an
-explicit transaction in failed state still needs `ROLLBACK`.
+auto result = co_await database.execute_borrowed("SELECT $1::int", parameters);
+```
 
-Message sizes, retained results, notification queues and SCRAM iteration work
-are bounded by `Limits`. These are protocol/retained-data limits, not an exact
-allocator accounting promise. Results, notifications and notices own their data.
-Take queued notices/notifications regularly; overflow fails rather than silently
-discarding messages. `wait_notification()` is an exclusive idle reader; do not
-start queries on that connection while waiting.
+`ParameterView` holds optional `string_view` data; disengaged means NULL,
+not an empty value. Binary parameters can contain NUL bytes with `Format::binary`.
+`prepare_borrowed` takes name/SQL views and a span of type IDs;
+`execute_prepared_borrowed`, `execute_outcome_borrowed` and
+`execute_prepared_outcome_borrowed` use the same input lifetime contract.
+BlockingConnection exposes the same methods as synchronous Results.
 
-`on_notification` optionally consumes newly decoded notifications through an
-owning `noexcept` callback. It does not create a reader: normal operations or an
-explicit `wait_notification()` must drive input. The wait still returns its
-owning event, and pre-existing queued events are not replayed through callbacks.
-[Notification delivery, save/restore and subscription lifetime](postgres-notifications.md).
+Keep SQL, names, parameter arrays and the data they reference alive until the
+Task completes, including cancellation cleanup. Do not pass temporary containers
+or mutate borrowed inputs while the operation executes. Deferred Tasks already
+retain the Connection's borrow, but do not own these input buffers. Pipeline
+queueing and batch methods remain owning because submission and sending are separate.
 
-An optional owning `noexcept` notice handler receives validated server diagnostics
-inline instead of queuing them. Pass it to `connect` to observe startup notices,
-or replace it synchronously with `on_notice`; reset retains the registration.
-[Notice callbacks, save/restore and lifetime rules](postgres-notices.md).
+These paths avoid input-container/string copies and the temporary type-ID vector,
+not all heap allocation: protocol encoding, owning results and coroutine frames
+still use the existing allocation model. An array in a coroutine may itself live
+inside a heap-allocated frame.
 
-`on_event` registers owning `noexcept` connection/result lifecycle observers
-with separate application-state slots. Result copies explicitly clone/share
-state; retained results do not implicitly keep their Connection alive. Scoped
-regression qualification passed; see [lifecycle events and ownership](postgres-events.md).
+## Pooling
 
-`on_trace` installs a separate owning `noexcept` protocol observer. Metadata is
-the default; application bodies require explicit bounded opt-in. Startup,
-authentication and backend cancellation keys are always withheld.
-[Protocol tracing, disclosure policy and execution contracts](postgres-tracing.md).
+```cpp
+weave::Task<void> example(weave::pg::Options options)
+{
+  auto pool = co_await weave::pg::Pool::create(
+    std::move(options),
+    {.max_connections = 16, .min_connections = 2});
 
-`start_rows` / `read_row` consume one owning row at a time, including multiple
-simple-query results. `row_columns()` borrows the current result's metadata until
-the next read changes it. `for_each_row(sql, handler)` awaits each Task callback
-before reading again and closes the connection if the callback fails.
-`open_portal` / `fetch` / `close_portal` expose bounded server-side chunks inside
-an explicit transaction. A fetched result's `suspended` flag means another fetch
-is needed; finish or close the portal before committing the transaction.
-`describe_portal(name)` returns owning column metadata without executing or
-advancing a named or unnamed portal. The blocking facade exposes the same method.
-[Portal lifetime, description and format contracts](postgres-portals.md).
+  {
+    auto database = co_await pool.acquire();
+    auto result = co_await database->execute("SELECT 42");
+  } // Returns the lease automatically.
 
-`pg::BlockingConnection::connect` owns a calling-thread Context and drives the
-same protocol engine with `run`. It returns synchronous `Result` values and
-does not create I/O worker threads. Explicit GSS providers use their own bounded
-credential workers. Use `pg::connect` inside a Context or Runtime
-for nonblocking coroutine execution. The blocking facade must remain on its
-creating thread; it is not an independently implemented protocol client.
-Do not drive its blocking operations from inside an executing Context/Task;
-use the nonblocking Connection there rather than recursively pumping a loop.
-The blocking facade exposes the same diagnostic factory overload, inspection,
-notice/notification queues, COPY/row metadata, quoting and fast-path operations.
+  pool.close();
+}
+```
 
-Build with `-DWEAVE_MODULES=postgres`. Consumers use
-`find_package(weave CONFIG REQUIRED COMPONENTS postgres)` and link
-`weave::postgres`. OpenSSL 3.5+ and ICU 70+ are required only by selected
-components. Library-only builds do not fetch libpq, test frameworks or servers.
-Building PostgreSQL from source also requires a C compiler for its private,
-vendored llhttp/uriparser engines; installed C++ consumers do not. Their headers
-and CMake targets are not exported, and their licenses are installed with Weave.
-On Linux, the native GSSAPI backend defaults on and requires the
-`krb5-gssapi` and `krb5` pkg-config packages (MIT Kerberos development files).
-Set `WEAVE_POSTGRES_GSSAPI=OFF` to build without that dependency. Windows links
-its system SSPI library. [GSS/SSPI authentication and encryption](postgres-gss.md) use an explicitly
-created, bounded provider context with captured identity and cancellation-safe
-offload. GSS encryption is opt-in; Linux real-server interoperability is qualified,
-while positive Windows domain/Kerberos encryption still needs deployment evidence.
+A move-only `PooledConnection` exposes the ordinary Connection through
+`->` / `*`. Destruction or synchronous `release()` returns it;
+`discard()` retires it. Drain every operation, pipeline and streaming borrow
+before releasing a lease. Moving the underlying Connection out is a fatal
+contract violation, and its `reset()` returns `operation_not_supported`.
+Use another pool to change configuration.
 
-[OAuth](postgres-oauth.md) supports custom providers and native HTTPS device
-authorization, protected PostgreSQL discovery and endpoint-pinned reconnects
-through Task/blocking facades. The native provider uses application-owned prompts
-and credentials, with an explicit synchronous cached-token lookup. An opt-in Linux
-Keycloak deployment gate covers real signed tokens and server introspection;
-full libpq OAuth parity, broader deployments and matched OAuth measurements remain pending.
+Borrowed Connection references, prepared names, large-object descriptors and
+CancelHandles belong to that checkout. Do not use them after releasing its lease;
+a retained backend CancelHandle could otherwise cancel a later borrower's work.
 
-Protocol reference: [PostgreSQL 18 message flow](https://www.postgresql.org/docs/18/protocol-flow.html)
-and [SASL authentication](https://www.postgresql.org/docs/18/sasl-authentication.html).
+| PoolOptions | Default and policy |
+| --- | --- |
+| `max_connections` | 16; accepted range 1-65,536 |
+| `min_connections` | 1; initial connections, at most the maximum; zero enables lazy startup |
+| `acquire_timeout` | 30 seconds; positive budget covers waiting, connection establishment and cleanup |
+| `idle_timeout` | 5 minutes; zero disables idle retirement |
+| `max_lifetime` | 30 minutes; zero disables lifetime retirement |
+
+Capacity admission is bounded and FIFO. Idle selection is LIFO, with expiration
+checked on checkout rather than by a background thread. Initial connection
+creation uses the connection's own startup deadlines; wrap `Pool::create` in
+`timeout` if the complete prewarm needs a deadline.
+
+Before reuse, the pool rolls back an open/failed transaction and executes
+`DISCARD ALL`. This removes session settings, temporary tables, prepared
+statements, LISTEN registrations and session advisory locks. Application
+callbacks, pending notices/notifications and local result state are cleared
+when a lease returns. Prepared statements cannot be assumed to survive checkout.
+Unfinished COPY/streaming or closed sessions are retired.
+
+A cleanup failure retires that session and fails the acquisition; a subsequent
+acquisition may connect afresh. No query is automatically retried or replayed.
+Replication startup is unsupported in pools. Owned connection credentials are
+retained for replacement sessions and cleansed when the last state owner ends;
+caller copies remain the application's responsibility.
+
+The pool belongs to its creating Context or compatible work-stealing domain.
+A worker-affine Runtime needs one pool per worker Context. Do not share a pool
+across unrelated Contexts, even on one thread. The Context must outlive the pool,
+leases and deferred acquisitions; keep Runtime-bound pools inside that domain.
+
+`close()` is synchronous: reject/wake acquisitions and retire idle sessions.
+Existing borrowers finish independently and are discarded on return. It does
+not cancel or join borrowers. Destruction closes the pool; outstanding leases
+retain its state. `stats()` snapshots idle, borrowed, pending, created, discarded
+and closed counters. Pending includes executing acquisitions, not unstarted Tasks.
+
+## Streaming And COPY
+
+`for_each_row` awaits a row callback for each row without retaining the full
+result. Callback failure retires the session. For explicit consumption,
+`start_rows` / `read_row` expose incremental rows; `row_columns()` borrows
+current metadata. Finish the stream before another command.
+
+`start_copy`, `write_copy`, `read_copy` and `end_copy` handle COPY
+phases. COPY output EOF is not returned until final command/ReadyForQuery
+processing completes. `copy_result()` exposes the terminal result.
+Keep borrowed buffers alive through the await; returned owning chunks can be
+retained. Do not issue unrelated commands during COPY.
+
+For reusable caller-owned storage:
+
+```cpp
+std::array<std::byte, 8192> buffer;
+
+while (auto received = co_await database.read_copy(buffer)) {
+  auto bytes = std::span{buffer}.first(received->size);
+  // Consume bytes before the buffer is reused.
+  // received->end_of_message distinguishes complete CopyData messages.
+}
+```
+
+`read_copy(span<byte>)` returns `optional<CopyRead>`: nullopt is EOF, while an
+engaged zero-size value is an empty CopyData message. The buffer must be nonempty
+and survive Task completion/cancellation cleanup. Large messages are delivered
+in pieces without truncation or a full-payload vector allocation. The next read
+continues the same message until `end_of_message` is true. Between pieces, the
+owning `read_copy()` and trace replacement return `busy`; finish the message
+before switching APIs. COPY BOTH `end_copy()` can drain an unfinished piece.
+Connection-wide message limits still apply. BlockingConnection has the same
+buffer overload.
+
+Disabled/metadata tracing does not retain COPY payloads. Explicit application
+tracing retains only its configured prefix and emits one trace at the complete
+message boundary, not one per piece. Protocol metadata, enabled tracing and
+coroutine machinery may still allocate; this is not an allocation-free connection.
+
+For bounded owning query chunks, use `exchange(sql, {.chunk_rows = 256})`.
+For portals, pipelines, mixed SQL/COPY, replication and large objects, see
+[advanced operations](postgres-advanced.md).
+
+## Encoding And Passwords
+
+Parameters/results are bytes, not automatically transcoded strings.
+`client_encoding()` is synchronous; `set_client_encoding(Encoding)` changes
+the server session asynchronously and validates its reported setting.
+
+Prefer parameters. Where SQL construction requires quoting, synchronous
+`escape_literal` / `escape_identifier` return fully quoted strings, reject
+NUL/invalid encoding and respect multibyte boundaries. Keep the encoding
+unchanged until execution. `encode_bytea` / `decode_bytea` handle bounded
+owning binary-text conversion, not SQL quoting.
+[Encoding and display contracts](postgres-observability.md#encoding).
+
+`change_password` generates a verifier rather than placing the plaintext
+password in SQL. [Verifier policy](postgres-connections.md#passwords).
+
+## Ownership And Cancellation
+
+A Connection is a serialized session, not a thread-safe query dispatcher.
+Deferred Tasks capture its borrow immediately and block reset/conflicting leases
+even before execution. Own or join those Tasks before destruction.
+Use one connection per concurrent operation, or a pool.
+
+Local Task cancellation of an active exchange retires the session after native
+operations drain. PostgreSQL CancelRequest is a separate API: capture a
+`CancelHandle`, await its `request()`, then await/drain the original command.
+It is not proof of rollback or of whether a command committed.
+[Cancellation and reset](postgres-connections.md#cancellation-and-reset).
+
+`close()` is immediate local teardown once operations have drained;
+`finish()` sends normal protocol termination asynchronously. Inspect
+`last_failure()` only after operations/leases drain.
+[Diagnostics and callbacks](postgres-observability.md).
+
+## Blocking Use
+
+`BlockingConnection` returns synchronous `Result<T>` from the same protocol
+engine, driven by its private caller-thread Context. It does not add a hidden
+runtime or networking thread. Use it outside an executing Context; recursive
+event-loop pumping is forbidden.
+
+The pool's Task API can also be driven synchronously by `Context::run`, on
+that Context's owner thread. There is no separate BlockingPool.

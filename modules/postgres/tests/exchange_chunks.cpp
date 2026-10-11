@@ -53,14 +53,14 @@ static void rows(const pg::ResultSet &result, unsigned &next, unsigned payload =
 {
   schema(result);
   for (const auto &row : result.rows) {
-    check(row.size() == 3 && row[0].data && row[1].data);
+    check(row.size() == 3 && row.values()[0].data && row.values()[1].data);
     for (const auto &value : row)
       check(value.format == pg::Format::text);
-    check(*row[0].data == std::to_string(next));
-    check(*row[1].data == std::string(payload, 'x'));
-    check(row[2].data.has_value() == (next % 2 != 0));
-    if (row[2].data)
-      check(row[2].data->empty());
+    check(*row.values()[0].data == std::to_string(next));
+    check(*row.values()[1].data == std::string(payload, 'x'));
+    check(row.values()[2].data.has_value() == (next % 2 != 0));
+    if (row.values()[2].data)
+      check(row.values()[2].data->empty());
     ++next;
   }
 }
@@ -120,9 +120,9 @@ static void binary(const pg::ResultSet &value, unsigned &next, bool &complete)
   for (const auto &row : value.rows) {
     check(row.size() == 3);
     check(row[0].format == pg::Format::binary && row[0].binary_integer<weave::i32>() == next);
-    check(row[1].format == pg::Format::binary && row[1].data && row[1].bytes() == std::string_view{"a\0b\xff", 4});
-    check(row[2].format == pg::Format::text && row[2].data.has_value() == (next % 2 != 0));
-    if (row[2].data)
+    check(row[1].format == pg::Format::binary && row.values()[1].data && row[1].bytes() == std::string_view{"a\0b\xff", 4});
+    check(row[2].format == pg::Format::text && row.values()[2].data.has_value() == (next % 2 != 0));
+    if (row.values()[2].data)
       check(row[2].bytes() == "caf\xc3\xa9");
     ++next;
   }

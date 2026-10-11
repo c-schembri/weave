@@ -57,7 +57,7 @@ struct Rows {
       memory_test::inspect(result);
     }
 
-    auto text = std::move(*values.front()[1].data);
+    auto text = std::move(*values.front().values()[1].data);
     const auto arena = text.get_allocator().arena().identity();
     values.clear();
     arenas.clear();

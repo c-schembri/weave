@@ -70,14 +70,14 @@ TEST_CASE("Result display rejects malformed shapes and escapes terminal control 
   CHECK_FALSE(result.format({.separator = "\n"}));
   CHECK(result.format({.input_bytes = 1}).error() == pg::make_error_code(pg::Error::resource_limit));
 
-  result.rows[0][0].data = std::string{"bad\n\x1btext"};
+  result.rows[0].values()[0].data = std::string{"bad\n\x1btext"};
   auto escaped = result.format();
   REQUIRE(escaped);
   if (!escaped)
     return;
   CHECK(escaped->find("bad\\x0a\\x1btext") != std::string::npos);
 
-  result.rows[0][0].data = std::string{"\xff"};
+  result.rows[0].values()[0].data = std::string{"\xff"};
   CHECK_FALSE(result.format());
   result.rows[0].pop_back();
   CHECK(result.format().error() == std::errc::invalid_argument);

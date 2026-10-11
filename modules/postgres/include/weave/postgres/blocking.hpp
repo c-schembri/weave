@@ -98,6 +98,23 @@ public:
     std::vector<Parameter> parameters = {},
     Format format = Format::text);
   Result<void> prepare(std::string name, std::string sql, std::vector<u32> types = {});
+  Result<ResultSet> execute_borrowed(
+    std::string_view sql,
+    std::span<const ParameterView> parameters = {},
+    Format format = Format::text);
+  Result<Outcome> execute_outcome_borrowed(
+    std::string_view sql,
+    std::span<const ParameterView> parameters = {},
+    Format format = Format::text);
+  Result<void> prepare_borrowed(std::string_view name, std::string_view sql, std::span<const u32> types = {});
+  Result<ResultSet> execute_prepared_borrowed(
+    std::string_view name,
+    std::span<const ParameterView> parameters = {},
+    Format format = Format::text);
+  Result<Outcome> execute_prepared_outcome_borrowed(
+    std::string_view name,
+    std::span<const ParameterView> parameters = {},
+    Format format = Format::text);
   Result<ResultSet> execute_prepared(
     std::string name,
     std::vector<Parameter> parameters = {},
@@ -116,6 +133,7 @@ public:
   Result<void> write_copy(std::span<const std::byte> data);
   Result<void> finish_copy_send();
   Result<std::optional<std::vector<std::byte>>> read_copy();
+  Result<std::optional<CopyRead>> read_copy(std::span<std::byte> buffer);
   Result<ResultSet> end_copy(std::optional<std::string> error = std::nullopt);
   Result<ResultSet> copy_result() const;
   Result<Results> copy_results() const;

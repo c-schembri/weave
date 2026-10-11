@@ -69,4 +69,4 @@ This is not a zero-allocation guarantee: tasks, payloads, and initial storage ma
 allocate. Allocation failure follows Weave's terminating, exception-free policy.
 
 [Pipeline example](../modules/sync/examples/pipeline.cpp) /
-[Cancellation](cancellation.md) / [Task lifetimes](tasks.md).
+[Cancellation and Task lifetimes](execution.md).

@@ -449,6 +449,46 @@ Result<void> BlockingConnection::prepare(std::string name, std::string sql, std:
   return state().ctx->run(state().connection->prepare(std::move(name), std::move(sql), std::move(types)));
 }
 
+Result<ResultSet> BlockingConnection::execute_borrowed(
+  std::string_view sql,
+  std::span<const ParameterView> parameters,
+  Format format)
+{
+  return state().ctx->run(state().connection->execute_borrowed(sql, parameters, format));
+}
+
+Result<Outcome> BlockingConnection::execute_outcome_borrowed(
+  std::string_view sql,
+  std::span<const ParameterView> parameters,
+  Format format)
+{
+  return state().ctx->run(state().connection->execute_outcome_borrowed(sql, parameters, format));
+}
+
+Result<void> BlockingConnection::prepare_borrowed(
+  std::string_view name,
+  std::string_view sql,
+  std::span<const u32> types)
+{
+  return state().ctx->run(state().connection->prepare_borrowed(name, sql, types));
+}
+
+Result<ResultSet> BlockingConnection::execute_prepared_borrowed(
+  std::string_view name,
+  std::span<const ParameterView> parameters,
+  Format format)
+{
+  return state().ctx->run(state().connection->execute_prepared_borrowed(name, parameters, format));
+}
+
+Result<Outcome> BlockingConnection::execute_prepared_outcome_borrowed(
+  std::string_view name,
+  std::span<const ParameterView> parameters,
+  Format format)
+{
+  return state().ctx->run(state().connection->execute_prepared_outcome_borrowed(name, parameters, format));
+}
+
 Result<ResultSet> BlockingConnection::execute_prepared(
   std::string name,
   std::vector<Parameter> parameters,
@@ -517,6 +557,11 @@ Result<void> BlockingConnection::finish_copy_send()
 Result<std::optional<std::vector<std::byte>>> BlockingConnection::read_copy()
 {
   return state().ctx->run(state().connection->read_copy());
+}
+
+Result<std::optional<CopyRead>> BlockingConnection::read_copy(std::span<std::byte> buffer)
+{
+  return state().ctx->run(state().connection->read_copy(buffer));
 }
 
 Result<ResultSet> BlockingConnection::end_copy(std::optional<std::string> error)

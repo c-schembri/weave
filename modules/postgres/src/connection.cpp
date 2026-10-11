@@ -7,6 +7,7 @@
 #include "oauth.hpp"
 #include "events.hpp"
 #include "result_access.hpp"
+#include "pool_access.hpp"
 #include <weave/timer.hpp>
 #include <weave/channel.hpp>
 #include <weave/semaphore.hpp>
@@ -24,6 +25,7 @@
 #include <limits>
 #include <numeric>
 #include <random>
+#include <ranges>
 
 namespace weave::pg {
 
@@ -560,7 +562,8 @@ Task<Transport> connect_transport(
   co_return Transport{std::move(stream)};
 }
 
-Result<detail::Writer> parse(std::string_view name, std::string_view sql, const std::vector<u32> &types)
+template <class Types>
+Result<detail::Writer> parse(std::string_view name, std::string_view sql, const Types &types)
 {
   if (!detail::cstring_valid(name) || !detail::cstring_valid(sql) || types.size() > 65535)
     return std::unexpected(std::make_error_code(std::errc::invalid_argument));
@@ -823,8 +826,11 @@ struct PipelineBuffer {
     if (entry.kind != PipelineKind::sync) {
       delivery.result.outcome.result.emplace();
       delivery.result.outcome.result->kind = ResultKind::acknowledgment;
-      if (with_schema)
+      if (with_schema) {
         delivery.result.outcome.result->columns = schema;
+        if (!schema.empty())
+          static_cast<void>(detail::ResultAccess::row_schema(*delivery.result.outcome.result));
+      }
     }
   }
 
@@ -1132,7 +1138,7 @@ struct Connection::TraceReceiver {
     bool redacted = sensitive || configuration.content == TraceContent::metadata;
     auto payload = redacted ? std::span<const std::byte>{}
                             : body.first((std::min)(body.size(), configuration.payload_bytes));
-    TraceMessage message{direction, kind, length, payload, redacted, !redacted && payload.size() != body.size()};
+    TraceMessage message{direction, kind, length, payload, redacted, !redacted && payload.size() != length - 4};
     configuration.handler(message);
 
     invoking.store(false, std::memory_order_release);
@@ -1150,6 +1156,7 @@ struct Connection::Impl {
   Semaphore copy_send{1};
   std::atomic<std::size_t> borrowers{0};
   bool connected = false;
+  bool pooled = false;
   bool authenticated = false;
   bool trace_ready = false;
   bool awaiting_ready = false;
@@ -1180,7 +1187,11 @@ struct Connection::Impl {
   std::optional<Results> copied;
   bool copy_send_done = false;
   bool copy_receive_done = false;
+  std::size_t copy_remaining = 0;
+  u32 copy_length = 0;
+  detail::Bytes copy_trace;
   std::vector<Column> streaming_columns;
+  std::shared_ptr<const detail::RowSchema> streaming_schema;
   bool streaming_description = false;
   std::array<std::byte, 65536> input;
   std::size_t begin = 0;
@@ -1370,23 +1381,52 @@ struct Connection::Impl {
     }
   }
 
-  Task<detail::Message> receive(bool sensitive = false)
+  Task<detail::Message> receive(bool sensitive = false, std::span<std::byte> copy_buffer = {})
   {
-    std::array<std::byte, 5> header;
-    co_await read_exactly(header);
-    detail::Reader reader{header};
     detail::Message message;
-    message.kind = static_cast<char>(reader.integer(1));
-    auto size = reader.integer();
-    if (size < 4)
-      co_await fail(Error::protocol);
-    if (size - 4 > options.limits.message_bytes)
-      co_await fail(Error::resource_limit);
+    if (copy_remaining != 0) {
+      weave::detail::require(!copy_buffer.empty());
+      message.kind = 'd';
+    } else {
+      std::array<std::byte, 5> header;
+      co_await read_exactly(header);
+      detail::Reader reader{header};
+      message.kind = static_cast<char>(reader.integer(1));
+      auto size = reader.integer();
+      if (size < 4)
+        co_await fail(Error::protocol);
+      if (size - 4 > options.limits.message_bytes)
+        co_await fail(Error::resource_limit);
 
-    message.body.resize(size - 4);
-    co_await read_exactly(message.body);
-    if (trace_receiver)
-      trace_receiver->deliver(TraceDirection::backend, message.kind, size, message.body, trace_ready && !sensitive);
+      if (message.kind == 'd' && !copy_buffer.empty()) {
+        copy_length = size;
+        copy_remaining = size - 4;
+        copy_trace.clear();
+      } else {
+        message.body.resize(size - 4);
+        co_await read_exactly(message.body);
+        if (trace_receiver)
+          trace_receiver->deliver(TraceDirection::backend, message.kind, size, message.body, trace_ready && !sensitive);
+        co_return message;
+      }
+    }
+
+    auto size = (std::min)(copy_buffer.size(), copy_remaining);
+    auto chunk = copy_buffer.first(size);
+    co_await read_exactly(chunk);
+    copy_remaining -= size;
+    message.copied = CopyRead{size, copy_remaining == 0};
+
+    if (trace_receiver) {
+      const auto &trace = trace_receiver->configuration;
+      if (trace.content == TraceContent::application && trace_ready) {
+        auto retained = (std::min)(chunk.size(), trace.payload_bytes - copy_trace.size());
+        copy_trace.insert(copy_trace.end(), chunk.begin(), chunk.begin() + retained);
+      }
+      if (copy_remaining == 0)
+        trace_receiver->deliver(TraceDirection::backend, 'd', copy_length, copy_trace, trace_ready);
+    }
+
     co_return message;
   }
 
@@ -2404,6 +2444,7 @@ struct Connection::Impl {
           if (!columns)
             co_await fail(columns.error());
           current->columns = std::move(*columns);
+          static_cast<void>(detail::ResultAccess::row_schema(*current));
         } else if (!message.body.empty()) {
           co_await fail(Error::protocol);
         }
@@ -2421,13 +2462,18 @@ struct Connection::Impl {
           co_await fail(columns.error());
 
         current->columns = std::move(*columns);
+        static_cast<void>(detail::ResultAccess::row_schema(*current));
         current->kind = ResultKind::tuples;
         description = true;
       } else if (message.kind == 'D') {
         if (!current || !description)
           co_await fail(Error::protocol);
 
-        auto row = detail::row(message.body, current->columns, detail::ResultAccess::rows(*current));
+        auto row = detail::row(
+          message.body,
+          current->columns,
+          detail::ResultAccess::rows(*current),
+          detail::ResultAccess::row_schema(*current));
         if (!row)
           co_await fail(row.error());
 
@@ -2612,10 +2658,10 @@ struct Connection::Impl {
     }
   }
 
-  template <bool RetainErrors = false>
+  template <bool RetainErrors = false, class Sql = std::string, class Parameters = std::vector<Parameter>>
   Task<std::conditional_t<RetainErrors, Outcome, ResultSet>> execute(
-    std::string sql,
-    std::vector<Parameter> parameters,
+    Sql sql,
+    Parameters parameters,
     Format format,
     bool prepared,
     [[maybe_unused]] Borrow borrow = {})
@@ -2624,9 +2670,9 @@ struct Connection::Impl {
       co_await fail(Error::resource_limit);
     detail::Writer request;
     if (!prepared) {
-      std::vector<u32> types;
-      for (const auto &parameter : parameters)
-        types.push_back(parameter.type);
+      auto types = parameters | std::views::transform([](const auto &parameter) {
+        return parameter.type;
+      });
 
       auto parsed = parse("", sql, types);
       if (!parsed)
@@ -2652,7 +2698,8 @@ struct Connection::Impl {
     co_return std::move(results.front());
   }
 
-  Task<void> prepare(std::string name, std::string sql, std::vector<u32> types, [[maybe_unused]] Borrow borrow = {})
+  template <class Name, class Sql, class Types>
+  Task<void> prepare(Name name, Sql sql, Types types, [[maybe_unused]] Borrow borrow = {})
   {
     if (types.size() > 65535 || name.size() > options.limits.message_bytes / 2 ||
       sql.size() > options.limits.message_bytes / 2)
@@ -2758,12 +2805,17 @@ struct Connection::Impl {
           co_await fail(columns.error());
 
         current->columns = std::move(*columns);
+        static_cast<void>(detail::ResultAccess::row_schema(*current));
         current->kind = ResultKind::tuples;
       } else if (message.kind == 'D') {
         if (!current)
           co_await fail(Error::protocol);
 
-        auto row = detail::row(message.body, current->columns, detail::ResultAccess::rows(*current));
+        auto row = detail::row(
+          message.body,
+          current->columns,
+          detail::ResultAccess::rows(*current),
+          detail::ResultAccess::row_schema(*current));
         if (!row)
           co_await fail(row.error());
 
@@ -2981,6 +3033,7 @@ struct Connection::Impl {
             co_await buffer.reserve(metadata);
 
             delivery.result.outcome.result->columns = std::move(*columns);
+            static_cast<void>(detail::ResultAccess::row_schema(*delivery.result.outcome.result));
             if (entry.chunk_rows) {
               auto size = message.body.size() + metadata;
               auto staged = delivery.retained + buffer.schema_bytes;
@@ -3004,7 +3057,8 @@ struct Connection::Impl {
             auto row = detail::row(
               message.body,
               delivery.result.outcome.result->columns,
-              detail::ResultAccess::rows(*delivery.result.outcome.result));
+              detail::ResultAccess::rows(*delivery.result.outcome.result),
+              detail::ResultAccess::row_schema(*delivery.result.outcome.result));
             if (!row)
               co_await fail(row.error());
             auto size = message.body.size() + sizeof(Row) + row->size() * sizeof(Value);
@@ -3014,7 +3068,11 @@ struct Connection::Impl {
             // Do not let the first row of the next batch retain the previous pool.
             auto arena = detail::ResultAccess::rows(*delivery.result.outcome.result);
             if (row->get_allocator().arena().identity() != arena.identity()) {
-              row = detail::row(message.body, delivery.result.outcome.result->columns, std::move(arena));
+              row = detail::row(
+                message.body,
+                delivery.result.outcome.result->columns,
+                std::move(arena),
+                detail::ResultAccess::row_schema(*delivery.result.outcome.result));
               if (!row)
                 co_await fail(row.error());
             }
@@ -3202,7 +3260,10 @@ struct Connection::Impl {
     guard.completed = true;
   }
 
-  Task<std::optional<std::vector<std::byte>>> copy_response(bool output)
+  template <bool IntoBuffer = false>
+  Task<std::optional<std::conditional_t<IntoBuffer, CopyRead, std::vector<std::byte>>>> copy_response(
+    bool output,
+    std::span<std::byte> buffer = {})
   {
     bool done = !output;
     const bool duplex = copy == CopyMode::both;
@@ -3213,7 +3274,7 @@ struct Connection::Impl {
     bool description = false;
     std::size_t retained = 0;
     for (;;) {
-      auto message = co_await receive();
+      auto message = co_await receive(false, buffer);
       auto handled = administrative(message);
       if (!handled)
         co_await fail(handled.error());
@@ -3233,7 +3294,10 @@ struct Connection::Impl {
           co_await fail(failure);
         done = true;
       } else if (!done && message.kind == 'd') {
-        co_return std::move(message.body);
+        if constexpr (IntoBuffer)
+          co_return *message.copied;
+        else
+          co_return std::move(message.body);
       } else if (!done && message.kind == 'c' && message.body.empty()) {
         done = true;
         if (duplex) {
@@ -3249,10 +3313,15 @@ struct Connection::Impl {
           co_await fail(columns.error());
 
         result.columns = std::move(*columns);
+        static_cast<void>(detail::ResultAccess::row_schema(result));
         retained += message.body.size() + sizeof(ResultSet) + result.columns.size() * sizeof(Column);
         description = true;
       } else if (duplex && done && !failure && message.kind == 'D' && description && !command) {
-        auto row = detail::row(message.body, result.columns, detail::ResultAccess::rows(result));
+        auto row = detail::row(
+          message.body,
+          result.columns,
+          detail::ResultAccess::rows(result),
+          detail::ResultAccess::row_schema(result));
         if (!row)
           co_await fail(row.error());
 
@@ -3296,6 +3365,8 @@ struct Connection::Impl {
     co_await cancellation_point();
     if (generation != copy_generation || (copy != CopyMode::output && copy != CopyMode::both))
       co_await fail(std::errc::invalid_argument);
+    if (copy_remaining != 0)
+      co_await fail(Error::busy);
 
     Guard guard{*this};
     if (auto result = guard.acquire(); !result)
@@ -3313,6 +3384,30 @@ struct Connection::Impl {
       co_await fail(result.error());
 
     co_return std::move(*result);
+  }
+
+  Task<std::optional<CopyRead>> read_copy(std::span<std::byte> buffer, u64 generation, [[maybe_unused]] Borrow borrow)
+  {
+    co_await cancellation_point();
+    if (buffer.empty() || generation != copy_generation || (copy != CopyMode::output && copy != CopyMode::both))
+      co_await fail(std::errc::invalid_argument);
+
+    Guard guard{*this};
+    if (auto result = guard.acquire(); !result)
+      co_await fail(result.error());
+    co_await guard.capture();
+
+    if (copy == CopyMode::both && copy_receive_done) {
+      guard.completed = true;
+      co_return std::nullopt;
+    }
+
+    auto result = co_await as_result(copy_response<true>(true, buffer));
+    guard.completed = result.has_value() || copy == CopyMode::none;
+    if (!result)
+      co_await fail(result.error());
+
+    co_return *result;
   }
 
   Task<ResultSet> end_copy(std::optional<std::string> failure, u64 generation, [[maybe_unused]] Borrow borrow = {})
@@ -3333,6 +3428,9 @@ struct Connection::Impl {
 
     if (copy == CopyMode::both) {
       co_await finish_copy_send(generation);
+      std::array<std::byte, 4096> discarded;
+      while (copy_remaining != 0)
+        static_cast<void>(co_await receive(false, discarded));
       while (!copy_receive_done)
         static_cast<void>(co_await copy_response(true));
     } else {
@@ -3376,6 +3474,7 @@ struct Connection::Impl {
     co_await write(request.bytes);
     copy = CopyMode::rows;
     streaming_columns.clear();
+    streaming_schema.reset();
     streaming_description = false;
     error = {};
     operation_error = {};
@@ -3431,11 +3530,12 @@ struct Connection::Impl {
           co_await fail(columns.error());
 
         streaming_columns = std::move(*columns);
+        streaming_schema = detail::make_row_schema(streaming_columns);
         streaming_description = true;
       } else if (!failure && message.kind == 'D') {
         if (!streaming_description)
           co_await fail(Error::protocol);
-        auto row = detail::row(message.body, streaming_columns);
+        auto row = detail::row(message.body, streaming_columns, {}, streaming_schema);
         if (!row)
           co_await fail(row.error());
 
@@ -3751,6 +3851,7 @@ struct Exchange::Impl {
   {
     ResultSet chunk;
     chunk.columns = result.columns;
+    detail::ResultAccess::share_schema(chunk, result);
     chunk.rows = std::move(result.rows);
     result.rows = detail::ResultList<Row>{};
     chunk.kind = ResultKind::row_chunk;
@@ -3846,9 +3947,14 @@ struct Exchange::Impl {
             co_await fail(status.error());
         }
         result.columns = std::move(*columns);
+        static_cast<void>(detail::ResultAccess::row_schema(result));
         description = true;
       } else if (message.kind == 'D' && description && (!direction || copy_tail)) {
-        auto row = detail::row(message.body, result.columns, detail::ResultAccess::rows(result));
+        auto row = detail::row(
+          message.body,
+          result.columns,
+          detail::ResultAccess::rows(result),
+          detail::ResultAccess::row_schema(result));
         if (!row)
           co_await fail(row.error());
         auto bytes = message.body.size() + sizeof(Row) + row->size() * sizeof(Value);
@@ -4590,7 +4696,7 @@ Connection::Connection(Connection &&other) noexcept
 {
   weave::detail::require(
     !other.impl_ ||
-    (!other.impl_->busy.load(std::memory_order_acquire) &&
+    (!other.impl_->pooled && !other.impl_->busy.load(std::memory_order_acquire) &&
       other.impl_->borrowers.load(std::memory_order_acquire) == 0 &&
       (!other.impl_->events || !other.impl_->events->invoking())));
   impl_ = std::move(other.impl_);
@@ -4599,6 +4705,45 @@ Connection::Connection(Connection &&other) noexcept
 }
 
 Connection::~Connection() = default;
+
+void detail::PoolAccess::enroll(Connection &connection) noexcept
+{
+  auto &state = connection.state();
+  weave::detail::require(!state.pooled);
+  state.pooled = true;
+}
+
+bool detail::PoolAccess::recycle(Connection &connection) noexcept
+{
+  weave::detail::require(connection.impl_ != nullptr && connection.impl_->pooled);
+  auto &state = *connection.impl_;
+  weave::detail::require(
+    state.borrowers.load(std::memory_order_acquire) == 0 && !state.busy.load(std::memory_order_acquire) &&
+    !state.copy_writing.load(std::memory_order_acquire) && !state.pipeline &&
+    (!state.events || !state.events->invoking()) && (!state.notice_receiver || !state.notice_receiver->invoking) &&
+    (!state.notification_receiver || !state.notification_receiver->invoking) &&
+    (!state.trace_receiver || !state.trace_receiver->invoking));
+
+  // Application callbacks and retained data must not cross a checkout boundary.
+  if (state.events)
+    state.events->destroy();
+  state.events.reset();
+  state.notice_receiver.reset();
+  state.notification_receiver.reset();
+  state.trace_receiver.reset();
+  state.notices.clear();
+  state.notifications.clear();
+  state.notice_bytes = 0;
+  state.notification_bytes = 0;
+  state.error = {};
+  state.operation_error = {};
+  state.copied.reset();
+  state.streaming_columns.clear();
+  state.streaming_schema.reset();
+  state.large_object_functions.fill(0);
+
+  return state.connected && state.copy == CopyMode::none && !state.awaiting_ready;
+}
 
 Connection::Impl &Connection::state() const noexcept
 {
@@ -4919,6 +5064,8 @@ Task<void> Connection::reset_impl(
 
   co_await cancellation_point();
   auto &original = state();
+  if (original.pooled)
+    co_await fail(std::errc::operation_not_supported);
   if (original.busy.exchange(true, std::memory_order_acq_rel))
     co_await fail(Error::busy);
 
@@ -5080,6 +5227,43 @@ Task<void> Connection::prepare(std::string name, std::string sql, std::vector<u3
   return state().prepare(std::move(name), std::move(sql), std::move(types), Borrow{*this});
 }
 
+Task<ResultSet> Connection::execute_borrowed(
+  std::string_view sql,
+  std::span<const ParameterView> parameters,
+  Format format)
+{
+  return state().execute(sql, parameters, format, false, Borrow{*this});
+}
+
+Task<Outcome> Connection::execute_outcome_borrowed(
+  std::string_view sql,
+  std::span<const ParameterView> parameters,
+  Format format)
+{
+  return state().execute<true>(sql, parameters, format, false, Borrow{*this});
+}
+
+Task<void> Connection::prepare_borrowed(std::string_view name, std::string_view sql, std::span<const u32> types)
+{
+  return state().prepare(name, sql, types, Borrow{*this});
+}
+
+Task<ResultSet> Connection::execute_prepared_borrowed(
+  std::string_view name,
+  std::span<const ParameterView> parameters,
+  Format format)
+{
+  return state().execute(name, parameters, format, true, Borrow{*this});
+}
+
+Task<Outcome> Connection::execute_prepared_outcome_borrowed(
+  std::string_view name,
+  std::span<const ParameterView> parameters,
+  Format format)
+{
+  return state().execute<true>(name, parameters, format, true, Borrow{*this});
+}
+
 Task<ResultSet> Connection::execute_prepared(std::string name, std::vector<Parameter> parameters, Format format)
 {
   return state().execute(std::move(name), std::move(parameters), format, true, Borrow{*this});
@@ -5166,6 +5350,11 @@ Task<void> Connection::finish_copy_send()
 Task<std::optional<std::vector<std::byte>>> Connection::read_copy()
 {
   return state().read_copy(state().copy_generation, Borrow{*this});
+}
+
+Task<std::optional<CopyRead>> Connection::read_copy(std::span<std::byte> buffer)
+{
+  return state().read_copy(buffer, state().copy_generation, Borrow{*this});
 }
 
 Task<ResultSet> Connection::end_copy(std::optional<std::string> error)
@@ -5490,7 +5679,7 @@ Result<Trace> Connection::on_trace(Trace trace)
 {
   auto &connection = state();
   if (connection.busy.load(std::memory_order_acquire) || connection.copy_writing.load(std::memory_order_acquire) ||
-    connection.borrowers.load(std::memory_order_acquire) != 0 ||
+    connection.borrowers.load(std::memory_order_acquire) != 0 || connection.copy_remaining != 0 ||
     (connection.trace_receiver && connection.trace_receiver->invoking.load(std::memory_order_acquire)) ||
     (connection.events && connection.events->invoking()))
     return std::unexpected(make_error_code(Error::busy));

@@ -141,7 +141,7 @@ static void same_rows(const pg::ResultSet &left, const pg::ResultSet &right)
     const auto &b = right.rows[index];
     check(a.size() == b.size());
     for (std::size_t field = 0; field != a.size(); ++field)
-      check(a[field].data == b[field].data && a[field].format == b[field].format);
+      check(a.values()[field].data == b.values()[field].data && a[field].format == b[field].format);
   }
 }
 
@@ -155,7 +155,7 @@ static void accounting()
     const auto footprint = result.memory_size();
     check(footprint == heap.live());
     check(result.rows[0][0].bytes() == std::string_view{"a\0b\xff", 4});
-    check(!result.rows[0][1].data && result.rows[1][1].data->size() == 1024);
+    check(!result.rows[0].values()[1].data && result.rows[1].values()[1].data->size() == 1024);
 
     {
       auto copied = result.copy();
@@ -163,9 +163,9 @@ static void accounting()
       same_columns(copied, result);
       same_rows(copied, result);
       check(copied.command == result.command);
-      check(copied.rows[1][1].data->data() != result.rows[1][1].data->data());
-      copied.rows[1][1].data->front() = 'y';
-      check(result.rows[1][1].data->front() == 'x');
+      check(copied.rows[1].values()[1].data->data() != result.rows[1].values()[1].data->data());
+      copied.rows[1].values()[1].data->front() = 'y';
+      check(result.rows[1].values()[1].data->front() == 'x');
       auto moved = std::move(copied);
       check(moved.rows.size() == 12);
     }
@@ -213,7 +213,7 @@ static void escaped()
   {
     auto result = storage::ResultAccess::create(heap.provider());
     populate(result);
-    text.emplace(std::move(*result.rows[1][1].data));
+    text.emplace(std::move(*result.rows[1].values()[1].data));
   }
   check(text->size() == 1024 && text->front() == 'x');
   check(text->get_allocator().arena().bytes() == heap.live());

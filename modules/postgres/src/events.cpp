@@ -83,11 +83,12 @@ void copy_fields(ResultSet &destination, const ResultSet &source, ResultCopyOpti
         std::optional<detail::ResultText> data;
         if (value.data)
           data.emplace(value.data->data(), value.data->size(), detail::ResultAllocator<char>{arena});
-        copied.push_back({std::move(data), value.format});
+        copied.push_back({std::move(data), value.format, value.type});
       }
       destination.rows.push_back(std::move(copied));
     }
   }
+  detail::ResultAccess::bind_rows(destination);
 }
 
 } // namespace
@@ -310,9 +311,10 @@ ResultSet::ResultSet(const ResultSet &other) : ResultSet(other.schema_storage_.h
 }
 
 ResultSet::ResultSet(ResultSet &&other) noexcept
-    : schema_storage_(std::move(other.schema_storage_)), events_(std::move(other.events_)), kind(other.kind),
-      columns(std::move(other.columns)), rows(std::move(other.rows)), command(std::move(other.command)),
-      parameter_types(std::move(other.parameter_types)), suspended(other.suspended)
+    : schema_storage_(std::move(other.schema_storage_)), row_schema_(std::move(other.row_schema_)),
+      events_(std::move(other.events_)), kind(other.kind), columns(std::move(other.columns)),
+      rows(std::move(other.rows)), command(std::move(other.command)), parameter_types(std::move(other.parameter_types)),
+      suspended(other.suspended)
 {
   weave::detail::require(!events_ || !events_->invoking);
 }
@@ -322,6 +324,7 @@ ResultSet &ResultSet::operator=(const ResultSet &other)
   if (this != &other) {
     detail::EventAccess::destroy(*this);
     schema_storage_ = detail::ResultArena::create(other.schema_storage_.heap());
+    row_schema_.reset();
     columns = detail::ResultList<Column>{detail::ResultAllocator<Column>{schema_storage_}};
     rows = detail::ResultList<Row>{detail::ResultAllocator<Row>{detail::ResultArena::create(schema_storage_.heap())}};
     command = detail::ResultText{detail::ResultAllocator<char>{schema_storage_}};
@@ -338,6 +341,7 @@ ResultSet &ResultSet::operator=(ResultSet &&other) noexcept
     weave::detail::require(!other.events_ || !other.events_->invoking);
     detail::EventAccess::destroy(*this);
     schema_storage_ = std::move(other.schema_storage_);
+    row_schema_ = std::move(other.row_schema_);
     kind = other.kind;
     columns = std::move(other.columns);
     rows = std::move(other.rows);
@@ -383,12 +387,16 @@ std::size_t ResultSet::memory_size() const
   add(rows.get_allocator().arena());
   add(command.get_allocator().arena());
   add(parameter_types.get_allocator().arena());
+  if (row_schema_)
+    add(row_schema_->columns.get_allocator().arena());
   if (events_)
     add(events_->entries.get_allocator().arena());
   for (const auto &column : columns)
     add(column.name.get_allocator().arena());
   for (const auto &row : rows) {
     add(row.get_allocator().arena());
+    if (const auto &metadata = detail::RowAccess::schema(row))
+      add(metadata->columns.get_allocator().arena());
     for (const auto &value : row) {
       if (value.data)
         add(value.data->get_allocator().arena());

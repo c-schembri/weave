@@ -1,6 +1,7 @@
 #pragma once
 
 #include <weave/tls.hpp>
+#include <weave/postgres/row.hpp>
 #include <weave/postgres/configuration.hpp>
 #include <weave/postgres/encoding.hpp>
 #include <weave/postgres/password.hpp>
@@ -26,6 +27,7 @@ namespace weave::pg {
 namespace detail {
 
 struct LargeObjectAccess;
+struct PoolAccess;
 struct OwnedOptions;
 struct ResultEvents;
 struct EventAccess;
@@ -48,10 +50,6 @@ std::error_code make_error_code(Error error) noexcept;
 std::error_code sql_error(std::string_view sqlstate) noexcept;
 std::string sqlstate(std::error_code error);
 
-enum class Format : u16 {
-  text,
-  binary
-};
 enum class ChannelBinding {
   disable,
   prefer,
@@ -398,57 +396,6 @@ struct ConnectionReport {
 
 using NoticeHandler = std::move_only_function<void(const Diagnostic &) noexcept>;
 
-struct Column {
-  detail::ResultText name;
-  u32 table = 0;
-  i16 attribute = 0;
-  u32 type = 0;
-  i16 type_size = 0;
-  i32 modifier = 0;
-  Format format = Format::text;
-};
-
-struct Value {
-  std::optional<detail::ResultText> data;
-  Format format = Format::text;
-
-  bool is_null() const noexcept;
-  std::string_view bytes() const noexcept;
-
-  template <class T>
-    requires(std::is_integral_v<T> && !std::same_as<T, bool>)
-  Result<T> integer() const noexcept
-  {
-    if (format != Format::text)
-      return std::unexpected(std::make_error_code(std::errc::operation_not_supported));
-    if (!data)
-      return std::unexpected(std::make_error_code(std::errc::invalid_argument));
-
-    T value{};
-    auto parsed = std::from_chars(data->data(), data->data() + data->size(), value);
-    if (parsed.ec != std::errc{} || parsed.ptr != data->data() + data->size())
-      return std::unexpected(std::make_error_code(std::errc::invalid_argument));
-
-    return value;
-  }
-
-  template <class T>
-    requires(std::is_integral_v<T> && !std::same_as<T, bool> && sizeof(T) <= 8)
-  Result<T> binary_integer() const noexcept
-  {
-    if (format != Format::binary || !data || data->size() != sizeof(T))
-      return std::unexpected(std::make_error_code(std::errc::invalid_argument));
-
-    std::make_unsigned_t<T> value = 0;
-    for (auto byte : *data)
-      value = static_cast<std::make_unsigned_t<T>>((value << 8) | static_cast<unsigned char>(byte));
-
-    return std::bit_cast<T>(value);
-  }
-};
-
-using Row = detail::ResultList<Value>;
-
 enum class ResultKind {
   uninitialized,
   empty_query,
@@ -490,6 +437,7 @@ struct ResultFormat {
 struct ResultSet {
 private:
   detail::ResultArena schema_storage_;
+  std::shared_ptr<const detail::RowSchema> row_schema_;
   std::unique_ptr<detail::ResultEvents> events_;
   friend struct detail::EventAccess;
   friend struct detail::ResultAccess;
@@ -520,6 +468,11 @@ public:
     std::string_view identifier,
     Encoding encoding = Encoding::utf8,
     std::size_t limit = 65536) const;
+  Result<ColumnHandle> column(std::string_view name) const;
+
+  template <class T>
+  Result<RowDecoder<T>> decoder() const;
+
   Result<u64> affected_rows() const noexcept;
   // Zero means no inserted OID. The text view borrows the command tag.
   Result<u32> inserted_oid() const noexcept;
@@ -536,6 +489,17 @@ struct Parameter {
   std::optional<std::string> data;
   u32 type = 0;
   Format format = Format::text;
+};
+
+struct ParameterView {
+  std::optional<std::string_view> data;
+  u32 type = 0;
+  Format format = Format::text;
+};
+
+struct CopyRead {
+  std::size_t size = 0;
+  bool end_of_message = false;
 };
 
 struct Notification {
@@ -746,6 +710,7 @@ class Connection {
   friend Task<Connection> connect(Options, ConnectionReport &, NoticeHandler, Trace);
   friend Task<ServerStatus> ping(Options);
   friend struct detail::LargeObjectAccess;
+  friend struct detail::PoolAccess;
   friend class Pipeline;
   friend class Exchange;
 
@@ -783,6 +748,24 @@ public:
   Task<ResultSet> execute(std::string sql, std::vector<Parameter> parameters = {}, Format format = Format::text);
   Task<Outcome> execute_outcome(std::string sql, std::vector<Parameter> parameters = {}, Format format = Format::text);
   Task<void> prepare(std::string name, std::string sql, std::vector<u32> types = {});
+  // SQL, names, spans and parameter data must survive Task completion, including cancellation cleanup.
+  Task<ResultSet> execute_borrowed(
+    std::string_view sql,
+    std::span<const ParameterView> parameters = {},
+    Format format = Format::text);
+  Task<Outcome> execute_outcome_borrowed(
+    std::string_view sql,
+    std::span<const ParameterView> parameters = {},
+    Format format = Format::text);
+  Task<void> prepare_borrowed(std::string_view name, std::string_view sql, std::span<const u32> types = {});
+  Task<ResultSet> execute_prepared_borrowed(
+    std::string_view name,
+    std::span<const ParameterView> parameters = {},
+    Format format = Format::text);
+  Task<Outcome> execute_prepared_outcome_borrowed(
+    std::string_view name,
+    std::span<const ParameterView> parameters = {},
+    Format format = Format::text);
   Task<ResultSet> execute_prepared(
     std::string name,
     std::vector<Parameter> parameters = {},
@@ -804,6 +787,8 @@ public:
   Task<void> write_copy(std::span<const std::byte> data);
   Task<void> finish_copy_send();
   Task<std::optional<std::vector<std::byte>>> read_copy();
+  // Nonempty borrowed buffer; nullopt is EOF, an engaged zero-size value is an empty CopyData message.
+  Task<std::optional<CopyRead>> read_copy(std::span<std::byte> buffer);
   Task<ResultSet> end_copy(std::optional<std::string> error = std::nullopt);
   Result<ResultSet> copy_result() const;
   Result<Results> copy_results() const;

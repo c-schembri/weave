@@ -271,11 +271,16 @@ static weave::Task<void> observe_fallback(weave::TcpListener &listener, bool &vi
     CHECK(socket.error() == std::errc::timed_out);
 }
 
-static weave::Task<void> rejected_connection(weave::u16 first, weave::u16 second, bool tls)
+static weave::Task<void> rejected_connection(
+  weave::u16 first,
+  weave::u16 second,
+  bool tls,
+  std::optional<weave::TlsContext> credentials)
 {
   pg::Options options;
   options.user = "test";
   options.plaintext = !tls;
+  options.tls = std::move(credentials);
   options.hosts = {{"127.0.0.1", first, {}}, {"127.0.0.1", second, {}}};
   options.connect_timeout = 1s;
   pg::Diagnostic diagnostic;
@@ -294,6 +299,16 @@ TEST_CASE("PostgreSQL authentication and TLS rejection never fall through to ano
 {
   const std::array modes{false, true};
   for (auto tls : modes) {
+    std::optional<weave::TlsContext> credentials;
+    if (tls) {
+      // Trust-store setup is synchronous and is not part of the rejection deadline.
+      auto identity = weave::TlsContext::client();
+      REQUIRE(identity);
+      if (!identity)
+        return;
+      credentials.emplace(std::move(*identity));
+    }
+
     auto ctx = weave::Context::create();
     REQUIRE(ctx);
     auto first = weave::tcp::listen(*ctx, "127.0.0.1", 0);
@@ -305,7 +320,7 @@ TEST_CASE("PostgreSQL authentication and TLS rejection never fall through to ano
       weave::when_all(
         reject_startup(*first, tls),
         observe_fallback(*second, visited),
-        rejected_connection(first->local_port(), second->local_port(), tls))));
+        rejected_connection(first->local_port(), second->local_port(), tls, std::move(credentials)))));
     CHECK_FALSE(visited);
   }
 }

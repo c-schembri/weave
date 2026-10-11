@@ -1,8 +1,8 @@
 find_package(OpenSSL 3.5 REQUIRED COMPONENTS Crypto)
 find_package(ICU 70 REQUIRED COMPONENTS uc i18n)
-add_library(weave_postgres src/wire.cpp src/diagnostic.cpp src/result_format.cpp src/auth.cpp src/options.cpp src/configuration.cpp src/configuration_info.cpp src/encoding.cpp src/connection.cpp src/blocking.cpp
+add_library(weave_postgres src/wire.cpp src/row.cpp src/diagnostic.cpp src/result_format.cpp src/auth.cpp src/options.cpp src/configuration.cpp src/configuration_info.cpp src/encoding.cpp src/connection.cpp src/blocking.cpp
   src/large_object.cpp src/large_object_file.cpp src/gss.cpp src/gss_pool.cpp src/gss_stream.cpp src/oauth.cpp src/oauth_sasl.cpp
-  src/oauth_json.cpp src/oauth_url.cpp src/oauth_http.cpp src/oauth_device.cpp src/events.cpp src/ldap.cpp)
+  src/oauth_json.cpp src/oauth_url.cpp src/oauth_http.cpp src/oauth_device.cpp src/events.cpp src/ldap.cpp src/pool.cpp)
 weave_module(postgres)
 set(WEAVE_POSTGRES_SYSCONFDIR "${CMAKE_INSTALL_FULL_SYSCONFDIR}" CACHE PATH
   "Compiled-in PostgreSQL service directory; empty disables automatic system-file discovery")
@@ -41,6 +41,8 @@ if(WEAVE_POSTGRES_LDAP)
   endif()
 endif()
 install(FILES src/vendor/yyjson/LICENSE DESTINATION "${CMAKE_INSTALL_DATADIR}/weave/licenses" RENAME yyjson-LICENSE)
+install(FILES include/weave/postgres/detail/vendor/pfr/LICENSE_1_0.txt
+  DESTINATION "${CMAKE_INSTALL_DATADIR}/weave/licenses" RENAME boost-pfr-LICENSE)
 install(FILES src/vendor/llhttp/LICENSE-MIT DESTINATION "${CMAKE_INSTALL_DATADIR}/weave/licenses" RENAME llhttp-LICENSE)
 install(FILES src/vendor/uriparser/COPYING.BSD-3-Clause DESTINATION "${CMAKE_INSTALL_DATADIR}/weave/licenses"
   RENAME uriparser-LICENSE)
@@ -116,6 +118,44 @@ function(weave_postgres_runtime target)
 endfunction()
 
 if(WEAVE_BUILD_TESTS)
+  add_executable(weave_postgres_buffers_live tests/buffers_live.cpp)
+  target_include_directories(weave_postgres_buffers_live PRIVATE "${PROJECT_SOURCE_DIR}/test_support")
+  target_link_libraries(weave_postgres_buffers_live PRIVATE weave::postgres OpenSSL::SSL OpenSSL::Crypto)
+  if(TARGET weave_runtime)
+    target_link_libraries(weave_postgres_buffers_live PRIVATE weave::runtime)
+    target_compile_definitions(weave_postgres_buffers_live PRIVATE WEAVE_POSTGRES_TEST_RUNTIME=1)
+  endif()
+  weave_no_exceptions(weave_postgres_buffers_live)
+  weave_postgres_runtime(weave_postgres_buffers_live)
+
+  add_executable(weave_postgres_pool tests/pool.cpp)
+  target_include_directories(weave_postgres_pool PRIVATE "${PROJECT_SOURCE_DIR}/test_support")
+  target_link_libraries(weave_postgres_pool PRIVATE weave::postgres)
+  set(pool_runtime)
+  if(TARGET weave_runtime)
+    target_link_libraries(weave_postgres_pool PRIVATE weave::runtime)
+    target_compile_definitions(weave_postgres_pool PRIVATE WEAVE_POSTGRES_TEST_RUNTIME=1)
+    set(pool_runtime --runtime)
+  endif()
+  weave_no_exceptions(weave_postgres_pool)
+  weave_postgres_runtime(weave_postgres_pool)
+  add_test(NAME weave_postgres_pool COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/pool.py" --executable "$<TARGET_FILE:weave_postgres_pool>" ${pool_runtime})
+  set_tests_properties(weave_postgres_pool PROPERTIES TIMEOUT 180 LABELS integration)
+  add_executable(weave_postgres_pool_live tests/pool_live.cpp)
+  target_include_directories(weave_postgres_pool_live PRIVATE "${PROJECT_SOURCE_DIR}/test_support")
+  target_link_libraries(weave_postgres_pool_live PRIVATE weave::postgres OpenSSL::SSL OpenSSL::Crypto)
+  if(TARGET weave_runtime)
+    target_link_libraries(weave_postgres_pool_live PRIVATE weave::runtime)
+    target_compile_definitions(weave_postgres_pool_live PRIVATE WEAVE_POSTGRES_TEST_RUNTIME=1)
+  endif()
+  weave_no_exceptions(weave_postgres_pool_live)
+  weave_postgres_runtime(weave_postgres_pool_live)
+  if(WEAVE_ENABLE_ASAN AND MSVC)
+    set_tests_properties(weave_postgres_pool PROPERTIES
+      ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${WEAVE_COMPILER_BIN}")
+  endif()
+
   add_executable(weave_postgres_tls_modes tests/tls_modes.cpp)
   target_include_directories(weave_postgres_tls_modes PRIVATE "${PROJECT_SOURCE_DIR}/test_support")
   target_link_libraries(weave_postgres_tls_modes PRIVATE weave::postgres OpenSSL::SSL OpenSSL::Crypto)
@@ -1500,7 +1540,7 @@ if(WEAVE_BUILD_TESTS)
       ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${WEAVE_COMPILER_BIN}")
   endif()
 
-  weave_add_test(weave_postgres_tests tests/wire.cpp tests/network.cpp tests/options.cpp tests/pipeline.cpp
+  weave_add_test(weave_postgres_tests tests/wire.cpp tests/row.cpp tests/record.cpp tests/network.cpp tests/buffers.cpp tests/options.cpp tests/pipeline.cpp
     tests/pipeline_streaming.cpp tests/copy_both.cpp tests/local.cpp tests/encoding.cpp tests/column_lookup.cpp
     tests/diagnostic.cpp tests/status.cpp tests/gss.cpp tests/result_format.cpp)
   target_include_directories(weave_postgres_tests PRIVATE src)
@@ -1611,6 +1651,22 @@ if(WEAVE_BUILD_TESTS)
   option(WEAVE_POSTGRES_SERVER_TESTS "Run opt-in qualification against a disposable real PostgreSQL server" OFF)
   if(WEAVE_POSTGRES_SERVER_TESTS)
     set(WEAVE_POSTGRES_SERVER_BIN "" CACHE PATH "Directory containing initdb and pg_ctl")
+    add_test(NAME weave_postgres_buffers_live COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/server.py" --executable "$<TARGET_FILE:weave_postgres_buffers_live>"
+      --server-bin "${WEAVE_POSTGRES_SERVER_BIN}")
+    set_tests_properties(weave_postgres_buffers_live PROPERTIES TIMEOUT 180 LABELS integration)
+    if(WEAVE_ENABLE_ASAN AND MSVC)
+      set_tests_properties(weave_postgres_buffers_live PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${WEAVE_COMPILER_BIN}")
+    endif()
+    add_test(NAME weave_postgres_pool_live COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/server.py" --executable "$<TARGET_FILE:weave_postgres_pool_live>"
+      --server-bin "${WEAVE_POSTGRES_SERVER_BIN}")
+    set_tests_properties(weave_postgres_pool_live PROPERTIES TIMEOUT 180 LABELS integration)
+    if(WEAVE_ENABLE_ASAN AND MSVC)
+      set_tests_properties(weave_postgres_pool_live PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${WEAVE_COMPILER_BIN}")
+    endif()
     add_test(NAME weave_postgres_tls_modes_live COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/server.py" --executable "$<TARGET_FILE:weave_postgres_tls_modes>"
       --server-bin "${WEAVE_POSTGRES_SERVER_BIN}")
@@ -1923,7 +1979,7 @@ if(WEAVE_POSTGRES_BENCHMARKS)
     pkg_check_modules(POSTGRES_COMPARE REQUIRED IMPORTED_TARGET libpq>=${postgres_comparison_version})
     set(postgres_comparison PkgConfig::POSTGRES_COMPARE)
   endif()
-  add_executable(weave_postgres_bench benchmarks/compare.cpp)
+  add_executable(weave_postgres_bench benchmarks/compare.cpp benchmarks/allocations.cpp)
   target_link_libraries(weave_postgres_bench PRIVATE weave::postgres ${postgres_comparison})
   weave_no_exceptions(weave_postgres_bench)
   target_compile_definitions(weave_postgres_bench PRIVATE _CRT_SECURE_NO_WARNINGS)
