@@ -5,6 +5,7 @@ add_library(weave_postgres src/wire.cpp src/row.cpp src/diagnostic.cpp src/resul
   src/oauth_json.cpp src/oauth_url.cpp src/oauth_http.cpp src/oauth_device.cpp src/events.cpp src/ldap.cpp src/pool.cpp
   src/migrations.cpp)
 weave_module(postgres)
+target_link_libraries(weave_postgres PRIVATE weave::json)
 set(WEAVE_POSTGRES_SYSCONFDIR "${CMAKE_INSTALL_FULL_SYSCONFDIR}" CACHE PATH
   "Compiled-in PostgreSQL service directory; empty disables automatic system-file discovery")
 function(weave_postgres_configuration_paths directory output)
@@ -41,7 +42,6 @@ if(WEAVE_POSTGRES_LDAP)
       DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/weave")
   endif()
 endif()
-install(FILES src/vendor/yyjson/LICENSE DESTINATION "${CMAKE_INSTALL_DATADIR}/weave/licenses" RENAME yyjson-LICENSE)
 install(FILES src/vendor/llhttp/LICENSE-MIT DESTINATION "${CMAKE_INSTALL_DATADIR}/weave/licenses" RENAME llhttp-LICENSE)
 install(FILES src/vendor/uriparser/COPYING.BSD-3-Clause DESTINATION "${CMAKE_INSTALL_DATADIR}/weave/licenses"
   RENAME uriparser-LICENSE)

@@ -1,5 +1,7 @@
 #if defined(WEAVE_USE_POSTGRES)
 #include <weave/postgres.hpp>
+#elif defined(WEAVE_USE_JSON)
+#include <weave/json.hpp>
 #elif defined(WEAVE_USE_DATABASE)
 #include <weave/database.hpp>
 #include <weave/database/detail/pool_inventory.hpp>
@@ -607,6 +609,13 @@ int main()
 
   auto error = weave::pg::sql_error("23505");
   return weave::pg::sqlstate(error) == "23505" ? 0 : 3;
+#elif defined(WEAVE_USE_JSON)
+  auto value = weave::json::read<int>("42");
+  if (!value || *value != 42)
+    return 1;
+  std::array<char, 128> output;
+  auto written = weave::json::write(*value, std::span{output});
+  return written && std::string_view{output.data(), *written} == "42" ? 0 : 1;
 #elif defined(WEAVE_USE_DATABASE)
   NativeRow row;
   auto record = weave::db::decode<DatabaseRecord>(row);

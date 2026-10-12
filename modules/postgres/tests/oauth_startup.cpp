@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 #include "oauth.hpp"
+#include "oauth_device.hpp"
 #include "credential_allocations.hpp"
 #include <weave/postgres.hpp>
 #include <weave/io.hpp>
@@ -158,6 +159,65 @@ TEST_CASE("JSON parsing pools cleanse even unknown decoded text on every outcome
   json.push_back('!');
   CHECK_FALSE(wire::oauth_discovery(bytes(json), policy()));
   CHECK(witness.dirty_releases() == 0);
+}
+
+TEST_CASE("OAuth JSON enforces node and container budgets including unknown fields")
+{
+  std::string members = R"({"status":"invalid_token")";
+  for (unsigned index = 0; index < 64; ++index)
+    members += ",\"key" + std::to_string(index) + "\":0";
+  members += "}";
+  auto keys = wire::oauth_discovery(bytes(members), policy());
+  CHECK((!keys && keys.error() == pg::Error::resource_limit));
+
+  std::string duplicates = R"({"status":"invalid_token")";
+  for (unsigned index = 0; index < 64; ++index)
+    duplicates += R"(,"status":"invalid_token")";
+  duplicates += "}";
+  auto repeated = wire::oauth_discovery(bytes(duplicates), policy());
+  CHECK((!repeated && repeated.error() == pg::Error::resource_limit));
+
+  std::string array = "[0";
+  for (unsigned index = 1; index < 256; ++index)
+    array += ",0";
+  array += "]";
+  auto within = wire::oauth_discovery(bytes(R"({"status":"invalid_token","x":)" + array + "}"), policy());
+  CHECK(within.has_value());
+  auto long_array = array;
+  long_array.insert(long_array.size() - 1, ",0");
+  auto over = wire::oauth_discovery(bytes(R"({"status":"invalid_token","x":)" + long_array + "}"), policy());
+  CHECK((!over && over.error() == pg::Error::resource_limit));
+
+  std::string nodes = R"({"status":"invalid_token","x":[)";
+  for (unsigned index = 0; index < 16; ++index) {
+    if (index)
+      nodes += ',';
+    nodes += array;
+  }
+  nodes += "]}";
+  auto count = wire::oauth_discovery(bytes(nodes), policy());
+  CHECK((!count && count.error() == pg::Error::resource_limit));
+}
+
+TEST_CASE("OAuth JSON validates ignored scalars and preserves unsigned integer token semantics")
+{
+  const std::array valid_values{"1.5", "1e2", "-1", "18446744073709551615", "null", "true"};
+  for (auto value : valid_values) {
+    auto input = std::string{R"({"status":"invalid_token","x":)"} + value + "}";
+    CHECK(wire::oauth_discovery(bytes(input), policy()));
+  }
+  const std::array invalid_values{"01", "truefalse", "Infinity", "[0,]"};
+  for (auto value : invalid_values) {
+    auto input = std::string{R"({"status":"invalid_token","x":)"} + value + "}";
+    CHECK_FALSE(wire::oauth_discovery(bytes(input), policy()));
+  }
+  const std::array non_integers{"1.0", "1e0", "-1", "true", "\"1\"", "18446744073709551616"};
+  for (auto value : non_integers) {
+    CAPTURE(std::string{value});
+    auto input = std::string{R"({"access_token":"abc","token_type":"Bearer","expires_in":)"} + value + "}";
+    auto token = wire::oauth_poll(bytes(input), 200);
+    CHECK((!token && token.error() == pg::Error::protocol));
+  }
 }
 
 static weave::Task<std::pair<char, wire::Bytes>> receive(auto &stream)

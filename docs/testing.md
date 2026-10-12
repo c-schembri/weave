@@ -4,6 +4,9 @@ Correctness and performance are separate. Windows CI runs Debug, Release and
 AddressSanitizer with TLS/PostgreSQL enabled, without benchmark execution or
 Tokio/libpq benchmark dependencies. Artifacts retain JUnit and failed-test logs.
 Sanitizers instrument first-party code, not every external provider.
+JSON checks cover Glaze struct mapping, strict document consumption, diagnostics
+and fixed-buffer bounds. OAuth additionally tests decoded-key ambiguity, resource
+budgets, integer token semantics and cleansing on success/failure.
 
 ## Run Correctness Tests
 

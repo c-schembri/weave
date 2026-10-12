@@ -205,6 +205,15 @@
 
 ## Module boundaries
 
+- Glaze is the official first-party C++ JSON library. Keep its pinned, unmodified
+  JSON headers in the optional json module; do not import its networking/runtime
+  facilities or make Core/TCP depend on JSON. Python tooling keeps the standard
+  library, and external C reference fixtures retain their native dependencies.
+  JSON read/write is synchronous. Preserve native error detail and byte offsets
+  without logging source documents. General typed decoding is not a protocol
+  validator: PostgreSQL OAuth also rejects duplicate decoded keys, enforces byte,
+  depth/node/container limits and cleanses all decoded keys/values on every outcome.
+  Keep those gates on upgrades; never substitute ordinary strings or a lossy DOM.
 - Organize code by feature under modules/<name>/. Each module owns its
   CMakeLists.txt, include/weave/ headers, src/ implementation, tests/, examples/,
   and benchmarks/ where applicable. Do not create empty directories.

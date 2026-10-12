@@ -5,6 +5,7 @@ Start with the [project README](../README.md), then open the guide for the featu
 | Guide | Contents |
 | --- | --- |
 | [Build](build.md) | Requirements, CMake components, installation and Windows/Linux setup |
+| [JSON](json.md) | Glaze struct conversion, buffer APIs, diagnostics and validation boundaries |
 | [Execution](execution.md) | Context, Runtime, Tasks, ownership, cancellation and timers |
 | [Networking](networking.md) | TCP, addresses, DNS, local sockets and stream helpers |
 | [Synchronization](synchronization.md) | Bounded channels and semaphores |

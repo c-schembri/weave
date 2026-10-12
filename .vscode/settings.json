@@ -5,6 +5,8 @@
   "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
   "C_Cpp.default.includePath": [
     "${workspaceFolder}/modules/core/include",
+    "${workspaceFolder}/modules/json/include",
+    "${workspaceFolder}/modules/json/vendor/include",
     "${workspaceFolder}/modules/database/include",
     "${workspaceFolder}/modules/io/include",
     "${workspaceFolder}/modules/runtime/include",

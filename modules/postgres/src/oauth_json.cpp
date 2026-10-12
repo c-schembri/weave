@@ -1,34 +1,14 @@
 #include "oauth.hpp"
 #include "oauth_http.hpp"
 #include "oauth_device.hpp"
+#include "oauth_json_types.hpp"
 #include <cstddef>
-
-// Upstream remains unmodified. Its C API has TU-local linkage in this wrapper.
-#define yyjson_api static
-#define YYJSON_DISABLE_WRITER 1
-#define YYJSON_DISABLE_INCR_READER 1
-#define YYJSON_DISABLE_UTILS 1
-#define YYJSON_DISABLE_NON_STANDARD 1
-#if defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(disable : 4505)
-#elif defined(__GNUC__)
-#pragma GCC diagnostic push
-#endif
-#include "vendor/yyjson/yyjson.c"
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#elif defined(__GNUC__)
-#pragma GCC diagnostic pop
-#endif
 
 namespace weave::pg::detail {
 
 namespace {
 
 constexpr std::size_t maximum_json = 65536;
-constexpr std::size_t maximum_nodes = 4096;
-constexpr std::size_t maximum_depth = 8;
 
 bool visible_ascii(std::string_view value) noexcept
 {
@@ -66,38 +46,49 @@ Result<std::size_t> issuer_path(std::string_view issuer)
   return std::string_view{"https://"}.size() + endpoint->authority.size();
 }
 
-std::string_view text(yyjson_val *value) noexcept
+bool is_text(const OAuthJsonValue *value) noexcept
 {
-  return {yyjson_get_str(value), yyjson_get_len(value)};
+  return value && std::holds_alternative<OAuthJsonText>(value->data);
 }
 
-Result<void> validate_tree(yyjson_val *value, std::size_t depth, std::size_t &nodes)
+std::string_view text(const OAuthJsonValue *value) noexcept
 {
-  bool container = yyjson_is_obj(value) || yyjson_is_arr(value);
-  if (++nodes > maximum_nodes || (container && depth > maximum_depth))
-    return std::unexpected(make_error_code(Error::resource_limit));
-  if (yyjson_is_obj(value)) {
-    if (yyjson_obj_size(value) > 64)
+  return std::get<OAuthJsonText>(value->data);
+}
+
+const OAuthJsonValue *member(const OAuthJsonValue *value, std::string_view key) noexcept
+{
+  auto *object = std::get_if<OAuthJsonMap>(&value->data);
+  if (!object)
+    return nullptr;
+  auto found = object->find(key);
+  return found == object->end() ? nullptr : &found->second;
+}
+
+const u64 *integer(const OAuthJsonValue *value) noexcept
+{
+  return value && value->unsigned_integer_token ? std::get_if<u64>(&value->data) : nullptr;
+}
+
+Result<void> validate_tree(const OAuthJsonValue &value)
+{
+  if (auto *object = std::get_if<OAuthJsonMap>(&value.data)) {
+    if (object->members > 64)
       return std::unexpected(make_error_code(Error::resource_limit));
-    std::array<std::string_view, 64> keys;
-    std::size_t count = 0;
-    auto iterator = yyjson_obj_iter_with(value);
-    while (auto *key = yyjson_obj_iter_next(&iterator)) {
-      auto name = text(key);
-      auto used = std::span{keys}.first(count);
-      if (name.find('\0') != std::string_view::npos || std::ranges::find(used, name) != used.end())
+    if (object->duplicate)
+      return std::unexpected(make_error_code(Error::protocol));
+    for (const auto &[key, child] : *object) {
+      if (std::string_view{key}.find('\0') != std::string_view::npos)
         return std::unexpected(make_error_code(Error::protocol));
-      keys[count++] = name;
-      auto result = validate_tree(yyjson_obj_iter_get_val(key), depth + 1, nodes);
+      auto result = validate_tree(child);
       if (!result)
         return result;
     }
-  } else if (yyjson_is_arr(value)) {
-    if (yyjson_arr_size(value) > 256)
+  } else if (auto *array = std::get_if<OAuthJsonValue::Array>(&value.data)) {
+    if (array->size() > 256)
       return std::unexpected(make_error_code(Error::resource_limit));
-    auto iterator = yyjson_arr_iter_with(value);
-    while (auto *item = yyjson_arr_iter_next(&iterator)) {
-      auto result = validate_tree(item, depth + 1, nodes);
+    for (const auto &child : *array) {
+      auto result = validate_tree(child);
       if (!result)
         return result;
     }
@@ -118,8 +109,12 @@ bool trusted_discovery(std::string_view url, std::string_view issuer, std::size_
 }
 
 struct JsonObject {
-  SecretStorage<std::max_align_t> memory;
-  yyjson_val *root = nullptr;
+  OAuthJsonValue value;
+
+  const OAuthJsonValue *root() const noexcept
+  {
+    return &value;
+  }
 
   JsonObject() = default;
   JsonObject(JsonObject &&) noexcept = default;
@@ -134,59 +129,50 @@ Result<JsonObject> json_object(std::span<const std::byte> json)
     return std::unexpected(make_error_code(Error::resource_limit));
 
   JsonObject object;
-  auto size = yyjson_read_max_memory_usage(json.size(), 0);
-  object.memory.resize((size + sizeof(std::max_align_t) - 1) / sizeof(std::max_align_t));
-  yyjson_alc allocator;
-  if (!yyjson_alc_pool_init(&allocator, object.memory.data(), object.memory.size() * sizeof(std::max_align_t)))
+  OAuthJsonContext context;
+  const std::string_view input{reinterpret_cast<const char *>(json.data()), json.size()};
+  auto parsed = glz::read<weave::json::detail::ReadPolicy{}>(object.value, input, context);
+  if (parsed.ec == glz::error_code::exceeded_max_recursive_depth)
     return std::unexpected(make_error_code(Error::resource_limit));
-  // Decoded strings remain in the owned cleansing pool; input is never modified.
-  auto *document = yyjson_read_opts(
-    const_cast<char *>(reinterpret_cast<const char *>(json.data())),
-    json.size(),
-    0,
-    &allocator,
-    nullptr);
-  if (!document || !yyjson_is_obj(yyjson_doc_get_root(document)))
+  if (parsed || !std::holds_alternative<OAuthJsonMap>(object.value.data))
     return std::unexpected(make_error_code(Error::protocol));
-  object.root = yyjson_doc_get_root(document);
-  std::size_t nodes = 0;
-  if (auto valid = validate_tree(object.root, 1, nodes); !valid)
+  if (auto valid = validate_tree(object.value); !valid)
     return std::unexpected(valid.error());
   return object;
 }
 
-Result<std::string_view> required_text(yyjson_val *root, const char *key, std::size_t limit = maximum_json)
+Result<std::string_view> required_text(const OAuthJsonValue *root, const char *key, std::size_t limit = maximum_json)
 {
-  auto *value = yyjson_obj_get(root, key);
-  if (!yyjson_is_str(value) || text(value).empty() || text(value).find('\0') != std::string_view::npos)
+  auto *value = member(root, key);
+  if (!is_text(value) || text(value).empty() || text(value).find('\0') != std::string_view::npos)
     return std::unexpected(make_error_code(Error::protocol));
   if (text(value).size() > limit)
     return std::unexpected(make_error_code(Error::resource_limit));
   return text(value);
 }
 
-Result<bool> string_array_contains(yyjson_val *value, std::string_view wanted)
+Result<bool> string_array_contains(const OAuthJsonValue *value, std::string_view wanted)
 {
-  if (!yyjson_is_arr(value) || !yyjson_arr_size(value))
+  auto *array = value ? std::get_if<OAuthJsonValue::Array>(&value->data) : nullptr;
+  if (!array || array->empty())
     return std::unexpected(make_error_code(Error::protocol));
   bool found = false;
-  auto iterator = yyjson_arr_iter_with(value);
-  while (auto *entry = yyjson_arr_iter_next(&iterator)) {
-    if (!yyjson_is_str(entry) || text(entry).empty() || text(entry).find('\0') != std::string_view::npos)
+  for (const auto &entry : *array) {
+    if (!is_text(&entry) || text(&entry).empty() || text(&entry).find('\0') != std::string_view::npos)
       return std::unexpected(make_error_code(Error::protocol));
-    found |= text(entry) == wanted;
+    found |= text(&entry) == wanted;
   }
   return found;
 }
 
-Result<std::chrono::seconds> seconds(yyjson_val *value, bool allow_zero = false)
+Result<std::chrono::seconds> seconds(const OAuthJsonValue *value, bool allow_zero = false)
 {
-  if (!yyjson_is_uint(value) || (!allow_zero && !yyjson_get_uint(value)))
+  auto number = integer(value);
+  if (!number || (!allow_zero && !*number))
     return std::unexpected(make_error_code(Error::protocol));
-  auto number = yyjson_get_uint(value);
-  if (number > 86400)
+  if (*number > 86400)
     return std::unexpected(make_error_code(Error::resource_limit));
-  return std::chrono::seconds{number};
+  return std::chrono::seconds{*number};
 }
 
 bool bearer(std::string_view value) noexcept
@@ -251,12 +237,12 @@ Result<OAuthDiscovery> oauth_discovery(std::span<const std::byte> json, const OA
   auto object = json_object(json);
   if (!object)
     return std::unexpected(object.error());
-  auto *root = object->root;
+  auto *root = object->root();
 
-  auto *status = yyjson_obj_get(root, "status");
-  auto *scope = yyjson_obj_get(root, "scope");
-  auto *url = yyjson_obj_get(root, "openid-configuration");
-  if (!yyjson_is_str(status) || (scope && !yyjson_is_str(scope)) || (url && !yyjson_is_str(url)))
+  auto *status = member(root, "status");
+  auto *scope = member(root, "scope");
+  auto *url = member(root, "openid-configuration");
+  if (!is_text(status) || (scope && !is_text(scope)) || (url && !is_text(url)))
     return std::unexpected(make_error_code(Error::protocol));
   if (text(status) != "invalid_token")
     return std::unexpected(make_error_code(Error::authentication));
@@ -301,9 +287,9 @@ Result<OAuthMetadata> oauth_metadata(std::span<const std::byte> json, std::strin
   auto object = json_object(json);
   if (!object)
     return std::unexpected(object.error());
-  auto identity = required_text(object->root, "issuer", 8192);
-  auto device = required_text(object->root, "device_authorization_endpoint", 8192);
-  auto token = required_text(object->root, "token_endpoint", 8192);
+  auto identity = required_text(object->root(), "issuer", 8192);
+  auto device = required_text(object->root(), "device_authorization_endpoint", 8192);
+  auto token = required_text(object->root(), "token_endpoint", 8192);
   if (!identity)
     return std::unexpected(identity.error());
   if (!device)
@@ -315,14 +301,14 @@ Result<OAuthMetadata> oauth_metadata(std::span<const std::byte> json, std::strin
   if (!oauth_https_url(*device) || !oauth_https_url(*token))
     return std::unexpected(make_error_code(Error::protocol));
 
-  auto device_grant = string_array_contains(yyjson_obj_get(object->root, "grant_types_supported"), oauth_device_grant);
+  auto device_grant = string_array_contains(member(object->root(), "grant_types_supported"), oauth_device_grant);
   if (!device_grant)
     return std::unexpected(device_grant.error());
   if (!*device_grant)
     return std::unexpected(std::make_error_code(std::errc::operation_not_supported));
 
   OAuthMetadata result{.device_endpoint = std::string{*device}, .token_endpoint = std::string{*token}, .basic = true};
-  if (auto *methods = yyjson_obj_get(object->root, "token_endpoint_auth_methods_supported")) {
+  if (auto *methods = member(object->root(), "token_endpoint_auth_methods_supported")) {
     auto basic = string_array_contains(methods, "client_secret_basic");
     auto post = string_array_contains(methods, "client_secret_post");
     if (!basic)
@@ -340,11 +326,11 @@ Result<OAuthGrant> oauth_grant(std::span<const std::byte> json)
   auto object = json_object(json);
   if (!object)
     return std::unexpected(object.error());
-  auto *root = object->root;
+  auto *root = object->root();
   auto device = required_text(root, "device_code");
   auto user = required_text(root, "user_code", 4096);
   auto verification = required_text(root, "verification_uri", 8192);
-  auto lifetime = seconds(yyjson_obj_get(root, "expires_in"));
+  auto lifetime = seconds(member(root, "expires_in"));
   if (!device)
     return std::unexpected(device.error());
   if (!user)
@@ -353,7 +339,7 @@ Result<OAuthGrant> oauth_grant(std::span<const std::byte> json)
     return std::unexpected(verification.error());
   if (!lifetime)
     return std::unexpected(lifetime.error());
-  if (!visible_ascii(*user) || !oauth_https_url(*verification, true) || yyjson_obj_get(root, "error"))
+  if (!visible_ascii(*user) || !oauth_https_url(*verification, true) || member(root, "error"))
     return std::unexpected(make_error_code(Error::protocol));
 
   OAuthGrant result;
@@ -361,13 +347,13 @@ Result<OAuthGrant> oauth_grant(std::span<const std::byte> json)
   result.user_code.assign(user->begin(), user->end());
   result.verification_uri.assign(verification->begin(), verification->end());
   result.lifetime = *lifetime;
-  if (auto *interval = yyjson_obj_get(root, "interval")) {
+  if (auto *interval = member(root, "interval")) {
     auto duration = seconds(interval, true);
     if (!duration)
       return std::unexpected(duration.error());
     result.interval = std::max(*duration, std::chrono::seconds{1});
   }
-  if (yyjson_obj_get(root, "verification_uri_complete")) {
+  if (member(root, "verification_uri_complete")) {
     auto complete = required_text(root, "verification_uri_complete", 8192);
     if (!complete || !oauth_https_url(*complete, true))
       return std::unexpected(make_error_code(Error::protocol));
@@ -381,9 +367,9 @@ Result<OAuthPollResult> oauth_poll(std::span<const std::byte> json, u16 status)
   auto object = json_object(json);
   if (!object)
     return std::unexpected(object.error());
-  auto *root = object->root;
+  auto *root = object->root();
   if (status != 200) {
-    if (yyjson_obj_get(root, "access_token") || yyjson_obj_get(root, "token_type"))
+    if (member(root, "access_token") || member(root, "token_type"))
       return std::unexpected(make_error_code(Error::protocol));
     auto error = required_text(root, "error", 256);
     if (!error || status != 400)
@@ -398,20 +384,21 @@ Result<OAuthPollResult> oauth_poll(std::span<const std::byte> json, u16 status)
       return std::unexpected(std::make_error_code(std::errc::permission_denied));
     return std::unexpected(make_error_code(Error::authentication));
   }
-  if (yyjson_obj_get(root, "error"))
+  if (member(root, "error"))
     return std::unexpected(make_error_code(Error::protocol));
   auto access = required_text(root, "access_token");
   auto type = required_text(root, "token_type", 256);
   if (!access || !type || !bearer(*type))
     return std::unexpected(make_error_code(Error::protocol));
-  if (auto *lifetime = yyjson_obj_get(root, "expires_in")) {
-    if (!yyjson_is_uint(lifetime))
+  if (auto *lifetime = member(root, "expires_in")) {
+    auto duration = integer(lifetime);
+    if (!duration)
       return std::unexpected(make_error_code(Error::protocol));
-    if (!yyjson_get_uint(lifetime))
+    if (!*duration)
       return std::unexpected(std::make_error_code(std::errc::timed_out));
   }
-  if (auto *scope = yyjson_obj_get(root, "scope")) {
-    if (!yyjson_is_str(scope) || !valid_scope(text(scope)))
+  if (auto *scope = member(root, "scope")) {
+    if (!is_text(scope) || !valid_scope(text(scope)))
       return std::unexpected(make_error_code(Error::protocol));
   }
   auto token = OAuthToken::parse(*access);

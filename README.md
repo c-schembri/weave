@@ -119,6 +119,9 @@ streaming and blocking use share the same engine.
 **Migrations:** explicit schema DSL, one C++ file per version, CMake-generated
 registration without Python. [API and recovery](docs/migrations.md).
 
+**JSON:** Glaze-backed struct conversion, synchronous checked results and reusable/fixed output buffers.
+[JSON API](docs/json.md).
+
 **TLS and synchronization:** verified OpenSSL streams, mTLS and explicit session/
 revocation controls; bounded Channel and Semaphore for backpressure/admission.
 [TLS](docs/tls.md) / [synchronization](docs/synchronization.md).
@@ -130,6 +133,7 @@ Include/link only what you need. TCP does not require Runtime.
 | Component | Header | CMake target |
 | --- | --- | --- |
 | Tasks, results, stream helpers | `<weave/core.hpp>`, `<weave/stream.hpp>` | `weave::core` |
+| JSON struct conversion | `<weave/json.hpp>` | `weave::json` |
 | Database storage, mapping and schema descriptions | `<weave/database.hpp>` | `weave::database` |
 | Context and timers | `<weave/io.hpp>` | `weave::io` |
 | Multicore runtime | `<weave/runtime.hpp>` | `weave::runtime` |

@@ -28,11 +28,12 @@ add_subdirectory(external/weave)
 target_link_libraries(my_app PRIVATE weave::tcp weave::runtime)
 ```
 
-Required dependencies are selected automatically. Core and Database are header-only;
+Required dependencies are selected automatically. Core, Database and JSON are header-only;
 other modules are static libraries. Database depends only on Core. Its private async
 pool support uses IO/Sync without becoming an installed component. TCP does not
 require Runtime, and Runtime does not require TCP. TLS adds TCP/Sync/OpenSSL;
-PostgreSQL adds Database, TLS, private local transport, OpenSSL Crypto and ICU.
+PostgreSQL adds Database, private JSON parsing, TLS, private local transport, OpenSSL Crypto and ICU.
+JSON uses pinned vendored Glaze headers; no consumer fetch or separately installed package is required.
 There is no all-features umbrella target or shared-library ABI/export support.
 
 Library-only builds do not fetch test/comparison dependencies. Tests, examples
@@ -56,8 +57,8 @@ find_package(weave CONFIG REQUIRED COMPONENTS tcp)
 target_link_libraries(my_app PRIVATE weave::tcp)
 ```
 
-Components are `core`, `database`, `io`, `runtime`, `tcp`, `local`, `sync`, `tls` and
-`postgres`; each exports `weave::<component>`. Installed headers are self-contained
+Components are `core`, `json`, `database`, `io`, `runtime`, `tcp`, `local`, `sync`, `tls` and
+`postgres`; each exports `weave::<component>`. Weave's public headers are self-contained
 and have no native OS header dependency.
 
 Consumers must deploy shared OpenSSL/ICU runtime libraries. Development targets
