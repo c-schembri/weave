@@ -8,3 +8,4 @@
 #include <weave/postgres/password.hpp>
 #include <weave/postgres/large_object.hpp>
 #include <weave/postgres/oauth.hpp>
+#include <weave/postgres/migrations.hpp>

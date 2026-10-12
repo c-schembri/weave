@@ -116,6 +116,9 @@ Include `<weave/postgres.hpp>`. Queries, prepared statements, batching, COPY,
 streaming and blocking use share the same engine.
 [PostgreSQL API and pooling](docs/postgres.md) / [libpq compatibility](docs/postgres-api-audit.md).
 
+**Migrations:** explicit schema DSL, one C++ file per version, CMake-generated
+registration without Python. [API and recovery](docs/migrations.md).
+
 **TLS and synchronization:** verified OpenSSL streams, mTLS and explicit session/
 revocation controls; bounded Channel and Semaphore for backpressure/admission.
 [TLS](docs/tls.md) / [synchronization](docs/synchronization.md).
@@ -127,6 +130,7 @@ Include/link only what you need. TCP does not require Runtime.
 | Component | Header | CMake target |
 | --- | --- | --- |
 | Tasks, results, stream helpers | `<weave/core.hpp>`, `<weave/stream.hpp>` | `weave::core` |
+| Database storage, mapping and schema descriptions | `<weave/database.hpp>` | `weave::database` |
 | Context and timers | `<weave/io.hpp>` | `weave::io` |
 | Multicore runtime | `<weave/runtime.hpp>` | `weave::runtime` |
 | TCP | `<weave/tcp.hpp>` | `weave::tcp` |

@@ -188,6 +188,9 @@
   configure/build/test workflows instead of duplicating them in a task runner.
 - Python is a development-tool dependency only. Discover the interpreter only
   when tests are enabled; do not require it for library-only builds or consumers.
+- Migration manifest generation is a CMake-native consumer feature, not Python
+  automation. Generate only in the build directory and verify source definitions
+  against generated declarations; never require an interpreter or parse C++.
 - Launch programs with argument lists, not shell command strings or shell=True.
   Use wsl --exec for Linux argument lists so filters are not interpreted by a
   shell. CTest qualification must use --no-tests=error; an empty selection is
@@ -250,6 +253,20 @@
   schema ownership alone cannot retain a cursor buffer or session-bound LOB.
   Preserve the PostgreSQL API during extraction. Do not introduce an ORM, SQL
   dialect rewriting, automatic query retry or placeholder vendor modules.
+- Database migrations describe explicit schema operations, never C++ object schemas
+  or an ORM. Keep canonical descriptions/history-prefix validation vendor-neutral;
+  dialect compilation, locking and transaction capabilities belong to drivers.
+  Freeze/version canonical encoding before changing enum tags or serialization.
+  Validate the complete manifest before schema/history changes, quote identifiers
+  and literal values separately, reject truncating identifiers, and never weaken
+  constraints or transaction guarantees silently. PostgreSQL holds one session
+  advisory lock across per-migration transactions and cleanup; retain the existing
+  deferred-session Borrow through completion. Cancellation cleanup is shielded;
+  failed cleanup retires the session. Nontransactional apply/revert publishes a
+  durable dirty marker first and requires manual recovery after partial failure.
+  Raw SQL is a trusted, vendor-tagged single-statement escape hatch, not a parser:
+  no transaction control, history/lock manipulation or client-encoding changes.
+  Never infer a transport-lost commit outcome, retry blindly, or synthesize down SQL.
 - Local streams use IO's shared private socket awaiters, retaining the same completion,
   cancellation and execution-affinity contracts as TCP. Keep filesystem paths and
   abstract names owned through lazy setup. Never unlink paths automatically or delete

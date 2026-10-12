@@ -7,3 +7,11 @@ foreach(source IN ITEMS queries/borrowed.cpp queries/primitives.cpp queries/stru
   set_target_properties(postgres_${example} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/$<CONFIG>")
   weave_postgres_runtime(postgres_${example})
 endforeach()
+
+add_executable(postgres_migrations migrations/main.cpp)
+target_link_libraries(postgres_migrations PRIVATE weave::postgres)
+weave_no_exceptions(postgres_migrations)
+weave_postgres_runtime(postgres_migrations)
+set_target_properties(postgres_migrations PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/$<CONFIG>")
+weave_add_migrations(TARGET postgres_migrations
+  DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/migrations/changes" NAME app_migrations)

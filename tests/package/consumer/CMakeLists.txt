@@ -65,6 +65,14 @@ target_compile_definitions(consumer PRIVATE WEAVE_USE_${component_define}=1)
 add_test(NAME installed_consumer COMMAND consumer)
 set_tests_properties(installed_consumer PROPERTIES TIMEOUT 15)
 
+if("database" IN_LIST WEAVE_EXPECTED_MODULES)
+  add_executable(migration_consumer migration_manifest.cpp)
+  weave_add_migrations(TARGET migration_consumer
+    DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/migrations" NAME package_migrations)
+  add_test(NAME installed_migration_manifest COMMAND migration_consumer)
+  set_tests_properties(installed_migration_manifest PROPERTIES TIMEOUT 15)
+endif()
+
 # Every installed header must compile on its own, without native OS headers.
 file(GLOB_RECURSE headers RELATIVE "${WEAVE_PREFIX}/include" "${WEAVE_PREFIX}/include/*.hpp")
 set(probes "")

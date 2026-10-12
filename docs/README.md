@@ -10,6 +10,7 @@ Start with the [project README](../README.md), then open the guide for the featu
 | [Synchronization](synchronization.md) | Bounded channels and semaphores |
 | [TLS](tls.md) | Verified connections, mTLS, sessions, revocation and credential policy |
 | [PostgreSQL](postgres.md) | Queries, results, streaming, COPY, pooling and blocking use |
+| [Migrations](migrations.md) | Schema DSL, per-file CMake registration, execution and recovery |
 | [PostgreSQL connections](postgres-connections.md) | Configuration, authentication, TLS modes, failover and cancellation |
 | [PostgreSQL advanced](postgres-advanced.md) | Pipelines, portals, mixed exchanges, replication and large objects |
 | [PostgreSQL observability](postgres-observability.md) | Diagnostics, metadata, callbacks, tracing and result storage |

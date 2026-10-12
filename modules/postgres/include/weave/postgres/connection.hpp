@@ -28,6 +28,7 @@ namespace detail {
 
 struct LargeObjectAccess;
 struct PoolAccess;
+struct MigrationAccess;
 struct OwnedOptions;
 struct ResultEvents;
 struct EventAccess;
@@ -868,6 +869,7 @@ class Connection {
   friend Task<ServerStatus> ping(Options);
   friend struct detail::LargeObjectAccess;
   friend struct detail::PoolAccess;
+  friend struct detail::MigrationAccess;
   friend class Pipeline;
   friend class Exchange;
 

@@ -47,6 +47,10 @@ Pool regressions cover capacity/reuse, concurrent Context/Runtime borrowers, per
 affine pools, rollback/DISCARD ALL, timeouts/cancellation, closure and retirement.
 Live checks verify actual server-session cleanup over plain and verified mTLS/SCRAM-PLUS.
 
+Migration description/history and CMake-generation checks run in the default suite.
+With server tests enabled, `weave_postgres_migrations_live` verifies atomic apply/down,
+concurrent runners, dirty history and cancellation cleanup on disposable databases.
+
 Borrowed-input/COPY-buffer regressions cover wire parity, NULL/binary parameters,
 partial/empty messages, malformed/oversized framing, cancellation, SQL recovery,
 generation/lifetime guards and bounded whole-message traces. Optional live checks

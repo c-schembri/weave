@@ -2,7 +2,8 @@ find_package(OpenSSL 3.5 REQUIRED COMPONENTS Crypto)
 find_package(ICU 70 REQUIRED COMPONENTS uc i18n)
 add_library(weave_postgres src/wire.cpp src/row.cpp src/diagnostic.cpp src/result_format.cpp src/auth.cpp src/options.cpp src/configuration.cpp src/configuration_info.cpp src/encoding.cpp src/connection.cpp src/blocking.cpp
   src/large_object.cpp src/large_object_file.cpp src/gss.cpp src/gss_pool.cpp src/gss_stream.cpp src/oauth.cpp src/oauth_sasl.cpp
-  src/oauth_json.cpp src/oauth_url.cpp src/oauth_http.cpp src/oauth_device.cpp src/events.cpp src/ldap.cpp src/pool.cpp)
+  src/oauth_json.cpp src/oauth_url.cpp src/oauth_http.cpp src/oauth_device.cpp src/events.cpp src/ldap.cpp src/pool.cpp
+  src/migrations.cpp)
 weave_module(postgres)
 set(WEAVE_POSTGRES_SYSCONFDIR "${CMAKE_INSTALL_FULL_SYSCONFDIR}" CACHE PATH
   "Compiled-in PostgreSQL service directory; empty disables automatic system-file discovery")
@@ -117,6 +118,15 @@ function(weave_postgres_runtime target)
 endfunction()
 
 if(WEAVE_BUILD_TESTS)
+  add_executable(weave_postgres_migrations_live tests/migrations_live.cpp)
+  target_include_directories(weave_postgres_migrations_live PRIVATE "${PROJECT_SOURCE_DIR}/test_support")
+  target_link_libraries(weave_postgres_migrations_live PRIVATE weave::postgres OpenSSL::SSL OpenSSL::Crypto)
+  if(TARGET weave_runtime)
+    target_link_libraries(weave_postgres_migrations_live PRIVATE weave::runtime)
+    target_compile_definitions(weave_postgres_migrations_live PRIVATE WEAVE_POSTGRES_TEST_RUNTIME=1)
+  endif()
+  weave_no_exceptions(weave_postgres_migrations_live)
+  weave_postgres_runtime(weave_postgres_migrations_live)
   add_executable(weave_postgres_buffers_live tests/buffers_live.cpp)
   target_include_directories(weave_postgres_buffers_live PRIVATE "${PROJECT_SOURCE_DIR}/test_support")
   target_link_libraries(weave_postgres_buffers_live PRIVATE weave::postgres OpenSSL::SSL OpenSSL::Crypto)
@@ -1650,6 +1660,14 @@ if(WEAVE_BUILD_TESTS)
   option(WEAVE_POSTGRES_SERVER_TESTS "Run opt-in qualification against a disposable real PostgreSQL server" OFF)
   if(WEAVE_POSTGRES_SERVER_TESTS)
     set(WEAVE_POSTGRES_SERVER_BIN "" CACHE PATH "Directory containing initdb and pg_ctl")
+    add_test(NAME weave_postgres_migrations_live COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/server.py" --executable "$<TARGET_FILE:weave_postgres_migrations_live>"
+      --server-bin "${WEAVE_POSTGRES_SERVER_BIN}")
+    set_tests_properties(weave_postgres_migrations_live PROPERTIES TIMEOUT 180 LABELS integration)
+    if(WEAVE_ENABLE_ASAN AND MSVC)
+      set_tests_properties(weave_postgres_migrations_live PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${WEAVE_COMPILER_BIN}")
+    endif()
     add_test(NAME weave_postgres_buffers_live COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/server.py" --executable "$<TARGET_FILE:weave_postgres_buffers_live>"
       --server-bin "${WEAVE_POSTGRES_SERVER_BIN}")

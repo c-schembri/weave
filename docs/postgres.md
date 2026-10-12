@@ -5,6 +5,8 @@ libpq. Include `<weave/postgres.hpp>` and link `weave::postgres`.
 OpenSSL Crypto and ICU implement authentication primitives and SASLprep.
 Runtime is optional.
 
+Version schema changes with the shared [migration DSL and CMake manifest helper](migrations.md).
+
 The module is experimental, not drop-in libpq or independently security audited.
 See the [API mapping](postgres-api-audit.md), [validation boundaries](testing.md)
 and [matched libpq measurements](postgres-benchmarks.md).

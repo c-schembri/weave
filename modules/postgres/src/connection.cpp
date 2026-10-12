@@ -8,6 +8,7 @@
 #include "events.hpp"
 #include "result_access.hpp"
 #include "pool_access.hpp"
+#include "migration_access.hpp"
 #include <weave/timer.hpp>
 #include <weave/channel.hpp>
 #include <weave/semaphore.hpp>
@@ -4778,6 +4779,50 @@ void Connection::Borrow::release() noexcept
 Connection::Borrow detail::LargeObjectAccess::borrow(Connection &connection) noexcept
 {
   return Connection::Borrow{connection};
+}
+
+Connection::Borrow detail::MigrationAccess::borrow(Connection &connection) noexcept
+{
+  return Connection::Borrow{connection};
+}
+
+Result<u32> detail::MigrationAccess::server_version(Connection &connection) noexcept
+{
+  auto &state = connection.state();
+  if (state.borrowers.load(std::memory_order_acquire) != 1 || state.copy_writing.load(std::memory_order_acquire))
+    return std::unexpected(make_error_code(Error::busy));
+
+  Connection::Impl::Guard guard{state};
+  auto acquired = guard.acquire();
+  guard.completed = true;
+  if (!acquired)
+    return std::unexpected(acquired.error());
+  auto version = state.server_parameters.find("server_version");
+  if (version == state.server_parameters.end())
+    return std::unexpected(make_error_code(Error::protocol));
+  return server_version_number(version->second);
+}
+
+Result<Failure> detail::MigrationAccess::failure(Connection &connection)
+{
+  auto &state = connection.state();
+  if (state.borrowers.load(std::memory_order_acquire) != 1 || state.copy_writing.load(std::memory_order_acquire) ||
+    state.busy.exchange(true, std::memory_order_acq_rel))
+    return std::unexpected(make_error_code(Error::busy));
+
+  struct Release {
+    std::atomic<bool> &busy;
+
+    ~Release()
+    {
+      busy.store(false, std::memory_order_release);
+    }
+  } release{state.busy};
+
+  auto error = state.operation_error;
+  if (!error && !state.error.fields.empty())
+    error = sql_error(state.error.sqlstate());
+  return Failure{error, state.error};
 }
 
 Task<u32> detail::LargeObjectAccess::resolve(Connection &connection, LargeObjectFunction function)
