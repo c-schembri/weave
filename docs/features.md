@@ -36,6 +36,46 @@
 | WebSocket clients/servers | TCP/TLS; HTTP handshake integration |
 | Native Redis client | Server/RESP versions TBD; TCP/TLS |
 | gRPC | HTTP/2; serialization version TBD |
+| GraphQL client | Specification revision TBD; HTTP/JSON |
+| GraphQL server | Schema validation, resolvers and execution; specification revision TBD |
+| GraphQL subscriptions | Transport/version TBD; pub/sub integration |
+| SQLite | Minimum TBD; embedded engine; blocking-work executor for async use |
+| SQL Server | TDS/server minimums TBD |
+| MariaDB compatibility | MySQL driver qualification; server minimum TBD |
+| Oracle Database | Server minimum and driver approach TBD |
+| IBM Db2 | Server minimum and driver approach TBD |
+| CockroachDB compatibility | PostgreSQL driver qualification; server minimum TBD |
+| YugabyteDB compatibility | PostgreSQL driver qualification; server minimum TBD |
+| Other PostgreSQL-compatible services | Per-vendor qualification; minimums TBD |
+| MongoDB | BSON and OP_MSG; server minimum TBD |
+| Couchbase | Server/protocol minimums TBD |
+| Cassandra | CQL; server/protocol minimums TBD |
+| ScyllaDB compatibility | CQL driver qualification; server minimum TBD |
+| DynamoDB | API version TBD; HTTPS |
+| Memcached | Server/protocol minimums TBD |
+| Neo4j | Server/protocol minimums TBD |
+| Elasticsearch | Server minimum TBD; HTTP/JSON |
+| OpenSearch | Server minimum TBD; HTTP/JSON |
+| ClickHouse | Server minimum and native/HTTP interface TBD |
+| DuckDB | Minimum TBD; embedded engine; blocking-work executor for async use |
+| NATS and JetStream | Server minimum TBD; TCP/TLS |
+| RabbitMQ compatibility | AMQP 0.9.1 and AMQP 1.0 qualification; server minimum TBD |
+| Pulsar | Server/protocol minimums TBD |
+| AMQP 0.9.1 | Separate wire implementation; TCP/TLS |
+| AMQP 1.0 | Separate wire implementation; TCP/TLS |
+| MQTT | MQTT 5.0; TCP/TLS |
+| AWS SQS | API version TBD; HTTPS |
+| AWS SNS | API version TBD; HTTPS |
+| Azure Service Bus | AMQP 1.0/HTTPS; API version TBD |
+| Google Pub/Sub | gRPC/HTTPS; API version TBD |
+| Protobuf | Library/version TBD |
+| Avro | Library/version TBD |
+| BSON | Codec/version TBD |
+| MessagePack | Codec/version TBD |
+| Schema Registry integration | Provider/API version TBD; HTTP |
+| S3-compatible object storage | S3 API; signing and per-provider qualification |
+| Azure Blob Storage | API version TBD; HTTPS |
+| Google Cloud Storage | API version TBD; HTTPS |
 | Blocking-work executor | Bounded worker pool; Task/executor integration |
 | Asynchronous file I/O | Platform file backends |
 | Consistent metrics and tracing | Existing runtime/protocol hooks |
