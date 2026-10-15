@@ -1,5 +1,6 @@
 #include "linux/uring.hpp"
 #include "linux/resolve.hpp"
+#include "linux/socket.hpp"
 #include <doctest/doctest.h>
 #include <array>
 #include <atomic>
@@ -102,6 +103,213 @@ TEST_CASE("Linux completion backpressure drains thousands of frames through a ti
   CHECK(ctx->metrics().submitted == 4096);
   CHECK(ctx->metrics().completed == 4096);
   CHECK(weave::detail::IoAccess::state(*ctx).operations_.empty());
+}
+
+static weave::Task<std::size_t> native_receive(
+  weave::Context &ctx,
+  int socket,
+  std::span<std::byte> buffer,
+  bool &receive_nonempty)
+{
+  weave::detail::SocketIoAwaiter operation{weave::detail::SocketIoAwaiter::receive, ctx, socket};
+  operation.buffer = buffer.data();
+  operation.size = buffer.size();
+  operation.receive_nonempty = &receive_nonempty;
+  auto result = co_await operation;
+  if (!result)
+    co_await weave::fail(result.error());
+  co_return *result;
+}
+
+TEST_CASE("Linux timed submission without a CQE still expires and drains native cancellation")
+{
+  auto ctx = weave::Context::create();
+  REQUIRE(ctx);
+  if (!ctx)
+    return;
+  std::array<int, 2> sockets{};
+  const auto created = socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets.data());
+  REQUIRE(created == 0);
+  if (created != 0)
+    return;
+
+  weave::CancelSource stop;
+  weave::detail::TimerRecord timer;
+  timer.context = &*ctx;
+  timer.deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds{10};
+  timer.event.state = &stop;
+  timer.event.invoke = [](void *state) noexcept {
+    static_cast<weave::CancelSource *>(state)->cancel();
+  };
+  // Install the deadline before running, without a wake CQE that could hide the empty timed return.
+  weave::detail::IoAccess::timers(*ctx).insert(timer);
+  std::array<std::byte, 1> buffer;
+  bool receive_nonempty = false;
+  auto operation = native_receive(*ctx, sockets[0], buffer, receive_nonempty);
+  weave::detail::TaskAccess::bind(operation, stop.token());
+  auto result = ctx->run(std::move(operation));
+  CHECK(!result);
+  if (!result)
+    CHECK(result.error() == std::errc::operation_canceled);
+  CHECK(receive_nonempty);
+  CHECK(timer.index == std::numeric_limits<std::size_t>::max());
+  CHECK(ctx->metrics().submitted == 1);
+  CHECK(ctx->metrics().completed == 1);
+  CHECK(weave::detail::IoAccess::state(*ctx).operations_.empty());
+  CHECK(ctx->run(weave::when_all()));
+  for (int socket : sockets)
+    CHECK(::close(socket) == 0);
+}
+
+struct ContextStopReceive : weave::detail::SocketIoAwaiter {
+  bool before_admission;
+  bool &destroyed;
+
+  ContextStopReceive(weave::Context &ctx, int socket, bool before, bool &destroyed)
+      : SocketIoAwaiter(receive, ctx, socket), before_admission(before), destroyed(destroyed)
+  {
+  }
+
+  ~ContextStopReceive()
+  {
+    CHECK(operation.native_done);
+    CHECK_FALSE(operation.cancel_pending);
+    destroyed = true;
+  }
+
+  template <class P>
+  bool await_suspend(std::coroutine_handle<P> continuation) noexcept
+  {
+    // This standalone owner cannot dispatch a CQE until await_suspend returns.
+    if (!before_admission) {
+      const bool pending = SocketIoAwaiter::await_suspend(continuation);
+      CHECK(pending);
+      context.request_stop();
+      CHECK(operation.cancelled);
+      return pending;
+    }
+
+    operation.event.state = continuation.address();
+    operation.event.invoke = [](void *state) noexcept {
+      std::coroutine_handle<>::from_address(state).resume();
+    };
+    operation.event.executor = weave::detail::current_executor;
+    context.request_stop();
+    // Bypass the socket awaiter's early-stop check to exercise backend admission.
+    weave::detail::IoAccess::submit(operation);
+    CHECK(operation.cancelled);
+    return true;
+  }
+};
+
+static weave::Task<void> context_stop_receive(weave::Context &ctx, int socket, bool before_admission, bool &destroyed)
+{
+  std::array<std::byte, 1> buffer{};
+  ContextStopReceive operation{ctx, socket, before_admission, destroyed};
+  operation.buffer = buffer.data();
+  operation.size = buffer.size();
+  auto received = co_await operation;
+  CHECK_FALSE(destroyed);
+  CHECK(operation.operation.native_done);
+  CHECK_FALSE(operation.operation.cancel_pending);
+  if (!received)
+    co_await weave::fail(received.error());
+  FAIL("Context-stopped receive returned data");
+}
+
+static void check_context_stop_receive(bool before_admission)
+{
+  constexpr std::array completion_modes{false, true};
+  for (bool skip : completion_modes) {
+    CAPTURE(skip);
+    CAPTURE(before_admission);
+    auto ctx = weave::Context::create({.skip_successful_completions = skip});
+    REQUIRE(ctx);
+    if (!ctx)
+      return;
+
+    std::array<int, 2> sockets{};
+    const auto created = socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets.data());
+    REQUIRE(created == 0);
+    if (created != 0)
+      return;
+
+    bool destroyed = false;
+    auto operation = context_stop_receive(*ctx, sockets[0], before_admission, destroyed);
+    weave::detail::TaskAccess::bind(operation, {});
+    auto result = ctx->run(std::move(operation));
+    CHECK_FALSE(result);
+    if (!result)
+      CHECK(result.error() == std::errc::operation_canceled);
+    CHECK(destroyed);
+    CHECK(ctx->stop_requested());
+    const weave::u64 submitted = before_admission ? 0 : 1;
+    CHECK(ctx->metrics().submitted == submitted);
+    CHECK(ctx->metrics().completed == submitted);
+    CHECK(weave::detail::IoAccess::state(*ctx).operations_.empty());
+    for (int socket : sockets)
+      CHECK(::close(socket) == 0);
+  }
+}
+
+TEST_CASE("Linux Context stop drains native receive with an empty task token")
+{
+  check_context_stop_receive(false);
+}
+
+TEST_CASE("Linux backend rejects native submission after Context stop")
+{
+  check_context_stop_receive(true);
+}
+
+TEST_CASE("Linux receive hints preserve staged bytes, partial reads and EOF")
+{
+  const std::array hints{false, true};
+  for (bool receive_nonempty : hints) {
+    CAPTURE(receive_nonempty);
+    auto ctx = weave::Context::create();
+    REQUIRE(ctx);
+    if (!ctx)
+      return;
+
+    std::array<int, 2> sockets{};
+    const auto created = socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets.data());
+    REQUIRE(created == 0);
+    if (created != 0)
+      return;
+
+    const std::array sent{std::byte{17}, std::byte{43}, std::byte{91}};
+    const auto written = ::send(sockets[1], sent.data(), sent.size(), MSG_NOSIGNAL);
+    REQUIRE(written == static_cast<ssize_t>(sent.size()));
+    if (written != static_cast<ssize_t>(sent.size())) {
+      for (int socket : sockets)
+        CHECK(::close(socket) == 0);
+      return;
+    }
+
+    auto read = [&]() -> weave::Task<void> {
+      std::array<std::byte, 3> received{};
+      auto first = co_await native_receive(*ctx, sockets[0], std::span{received}.first(1), receive_nonempty);
+      CHECK(first == 1);
+      auto remaining = co_await native_receive(*ctx, sockets[0], std::span{received}.subspan(1), receive_nonempty);
+      CHECK(remaining == 2);
+      CHECK(received == sent);
+      CHECK_FALSE(receive_nonempty);
+
+      const auto stopped = ::shutdown(sockets[1], SHUT_WR);
+      const auto error = stopped == 0 ? 0 : errno;
+      CHECK(stopped == 0);
+      if (stopped != 0)
+        co_await weave::fail(std::error_code{error, std::generic_category()});
+      CHECK((co_await native_receive(*ctx, sockets[0], received, receive_nonempty)) == 0);
+    };
+    CHECK(ctx->run(weave::timeout(std::chrono::seconds{1}, read())));
+    CHECK(ctx->metrics().submitted == 3);
+    CHECK(ctx->metrics().completed == 3);
+    CHECK(weave::detail::IoAccess::state(*ctx).operations_.empty());
+    for (int socket : sockets)
+      CHECK(::close(socket) == 0);
+  }
 }
 
 struct ResolverFixture {

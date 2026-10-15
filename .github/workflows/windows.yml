@@ -83,7 +83,7 @@ jobs:
           key: openssl-icu-windows-2022-x64-e182cb4dd2df2ab02f66a1aabd5f35bbdc9522c7-v1
 
       - name: Configure without benchmarks
-        run: cmake --preset ${{ matrix.configure }} -DWEAVE_BUILD_BENCHMARKS=OFF -DWEAVE_POSTGRES_BENCHMARKS=OFF -DOPENSSL_ROOT_DIR="%GITHUB_WORKSPACE%/build/vcpkg/installed/x64-windows" -DICU_ROOT="%GITHUB_WORKSPACE%/build/vcpkg/installed/x64-windows"
+        run: cmake --preset ${{ matrix.configure }} -DWEAVE_BUILD_BENCHMARKS=OFF -DWEAVE_POSTGRES_BENCHMARKS=OFF -DWEAVE_MYSQL_BENCHMARKS=OFF -DOPENSSL_ROOT_DIR="%GITHUB_WORKSPACE%/build/vcpkg/installed/x64-windows" -DICU_ROOT="%GITHUB_WORKSPACE%/build/vcpkg/installed/x64-windows"
 
       - name: Build tests and examples
         run: cmake --build --preset ${{ matrix.preset }} --parallel 4

@@ -30,18 +30,21 @@ include(cmake/WeaveModule.cmake)
 
 set(WEAVE_ENABLED_MODULES core)
 foreach(module IN LISTS WEAVE_MODULES)
-  if(NOT module MATCHES "^(core|json|database|io|runtime|tcp|local|sync|tls|postgres)$")
+  if(NOT module MATCHES "^(core|json|database|io|runtime|tcp|local|sync|tls|postgres|mysql)$")
     message(FATAL_ERROR "Unknown Weave component: ${module}")
   endif()
   list(APPEND WEAVE_ENABLED_MODULES "${module}")
-  if(module MATCHES "^(runtime|tcp|local|sync|tls|postgres)$")
+  if(module MATCHES "^(runtime|tcp|local|sync|tls|postgres|mysql)$")
     list(APPEND WEAVE_ENABLED_MODULES io)
   endif()
-  if(module MATCHES "^(tls|postgres)$")
+  if(module MATCHES "^(tls|postgres|mysql)$")
     list(APPEND WEAVE_ENABLED_MODULES tcp sync)
   endif()
   if(module STREQUAL "postgres")
     list(APPEND WEAVE_ENABLED_MODULES tls local database json)
+  endif()
+  if(module STREQUAL "mysql")
+    list(APPEND WEAVE_ENABLED_MODULES tls database)
   endif()
 endforeach()
 list(REMOVE_DUPLICATES WEAVE_ENABLED_MODULES)
@@ -67,7 +70,7 @@ if(WEAVE_BUILD_TESTS)
 endif()
 
 # Keep dependency order explicit; each module owns its sources, headers and tests.
-foreach(module IN ITEMS core json database io runtime tcp local sync tls postgres)
+foreach(module IN ITEMS core json database io runtime tcp local sync tls postgres mysql)
   if(module IN_LIST WEAVE_ENABLED_MODULES)
     add_subdirectory(modules/${module})
   endif()
@@ -137,6 +140,7 @@ if(WEAVE_BUILD_TESTS)
       "-DWEAVE_ASAN=${WEAVE_ENABLE_ASAN}"
       "-DWEAVE_PACKAGE_TLS=$<TARGET_EXISTS:weave_tls>"
       "-DWEAVE_PACKAGE_POSTGRES=$<TARGET_EXISTS:weave_postgres>"
+      "-DWEAVE_PACKAGE_MYSQL=$<TARGET_EXISTS:weave_mysql>"
       "-DWEAVE_POSTGRES_GSSAPI=${WEAVE_POSTGRES_GSSAPI}"
       "-DWEAVE_POSTGRES_LDAP=${WEAVE_POSTGRES_LDAP}"
       "-DWeaveLDAP_INCLUDE_DIR=${WeaveLDAP_INCLUDE_DIR}"

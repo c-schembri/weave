@@ -336,7 +336,9 @@ static void selective(const pg::ResultSet &source, const std::shared_ptr<Stats> 
             for (std::size_t index = 0; index < source.rows[row].size(); ++index) {
               const auto &actual = result.rows[row][index];
               const auto &expected = source.rows[row][index];
-              check(actual.data == expected.data && actual.format == expected.format);
+              check(actual.is_null() == expected.is_null() && actual.format == expected.format);
+              if (!actual.is_null())
+                check(actual.bytes() == expected.bytes());
             }
           }
           result.rows.front().front().data = "mutated";

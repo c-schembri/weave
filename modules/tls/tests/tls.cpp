@@ -2,6 +2,7 @@
 #include <weave/timer.hpp>
 #include <weave/channel.hpp>
 #include "tls_certificates.hpp"
+#include <openssl/err.h>
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
@@ -10,6 +11,7 @@ using namespace std::chrono_literals;
 enum class Mode {
   echo,
   idle,
+  read_error,
   truncated,
   write_cancel,
   shutdown_cancel,
@@ -28,14 +30,22 @@ enum class Rejection {
 struct Fragmented {
   weave::TcpStream socket;
   weave::Semaphore *write_gate = nullptr;
+  std::vector<std::size_t> *write_sizes = nullptr;
+  const bool *read_failure = nullptr;
 
   weave::Task<std::size_t> read(std::span<std::byte> buffer)
   {
+    if (read_failure && *read_failure)
+      co_await weave::fail(std::make_error_code(std::errc::io_error));
+
     co_return co_await socket.read(buffer.first((std::min)(buffer.size(), std::size_t{257})));
   }
 
   weave::Task<void> write_all(std::span<const std::byte> buffer)
   {
+    if (write_sizes)
+      write_sizes->push_back(buffer.size());
+
     if (write_gate) {
       auto permit = co_await write_gate->acquire();
     }
@@ -111,8 +121,13 @@ static weave::Task<void> client(
   weave::TlsVersion version)
 {
   weave::Semaphore writes(1);
+  std::vector<std::size_t> write_sizes;
+  bool read_failure = false;
   auto raw = co_await weave::tcp::connect("127.0.0.1", port);
-  auto handshake = weave::tls::client(Fragmented{std::move(raw), &writes}, tls, std::move(name));
+  auto handshake = weave::tls::client(
+    Fragmented{std::move(raw), &writes, &write_sizes, mode == Mode::read_error ? &read_failure : nullptr},
+    tls,
+    std::move(name));
 
   if (mode == Mode::handshake_cancel) {
     auto result = co_await weave::as_result(weave::timeout(5ms, std::move(handshake)));
@@ -121,6 +136,27 @@ static weave::Task<void> client(
   }
 
   auto peer = co_await std::move(handshake);
+
+  if (mode == Mode::read_error) {
+    read_failure = true;
+    const auto error = std::make_error_code(std::errc::io_error);
+    std::array<std::byte, 1> buffer;
+    auto result = co_await weave::as_result(peer.read(buffer));
+    REQUIRE_FALSE(result);
+    if (result)
+      co_return;
+    CHECK(result.error().value() == error.value());
+    CHECK(result.error().category() == error.category());
+
+    auto retry = co_await weave::as_result(peer.read(buffer));
+    REQUIRE_FALSE(retry);
+    if (retry)
+      co_return;
+    CHECK(retry.error().value() == error.value());
+    CHECK(retry.error().category() == error.category());
+    REQUIRE(peer.close());
+    co_return;
+  }
 
   if (mode == Mode::busy) {
     std::array<std::byte, 1> buffer;
@@ -182,9 +218,28 @@ static weave::Task<void> client(
   REQUIRE((peer.version() == version));
   REQUIRE((peer.negotiated_protocol() == "echo"));
 
-  co_await peer.shutdown_send();
-  REQUIRE((co_await peer.read(unused)) == 0);
-  co_await peer.shutdown();
+  auto moved = std::move(peer);
+  const std::array sizes{std::size_t{1}, std::size_t{513}, std::size_t{16384}};
+  for (auto size : sizes) {
+    sent.assign(size, std::byte{17});
+    sent.back() = std::byte{93};
+    received.assign(size, std::byte{0});
+    write_sizes.clear();
+    co_await weave::when_all(moved.read_exactly(received), moved.write_all(sent));
+    REQUIRE((received == sent));
+    if (size == 16384) {
+      // A maximum-size plaintext record, including TLS framing, fits in one transport write.
+      REQUIRE(write_sizes.size() == 1);
+      if (write_sizes.size() == 1) {
+        CHECK(write_sizes[0] > size);
+        CHECK(write_sizes[0] <= 17 * 1024);
+      }
+    }
+  }
+
+  co_await moved.shutdown_send();
+  REQUIRE((co_await moved.read(unused)) == 0);
+  co_await moved.shutdown();
 }
 
 static weave::Task<void> capture(
@@ -220,6 +275,7 @@ TEST_CASE("TLS adapters verify peers, preserve duplex IO, and drain cancellation
     const std::array modes{
       Mode::echo,
       Mode::idle,
+      Mode::read_error,
       Mode::truncated,
       Mode::write_cancel,
       Mode::shutdown_cancel,
@@ -367,14 +423,56 @@ static void transfer(weave::detail::TlsEngine &source, weave::detail::TlsEngine 
   for (;;) {
     auto count = source.output(buffer);
     REQUIRE(count);
-    if (!*count)
+    if (!count || !*count)
       return;
 
-    REQUIRE(destination.input(std::span{buffer}.first(*count)));
+    auto accepted = destination.input(std::span{buffer}.first(*count));
+    REQUIRE(accepted);
+    if (!accepted)
+      return;
   }
 }
 
-TEST_CASE("TLS shutdown consumes buffered peer close_notify before requesting more input")
+static bool transfer_small(weave::detail::TlsEngine &source, weave::detail::TlsEngine &destination)
+{
+  std::array<std::byte, 3> buffer;
+  std::size_t drains = 0;
+  for (;;) {
+    auto pending = source.has_output();
+    REQUIRE(pending);
+    if (!pending)
+      return false;
+    auto count = source.output(buffer);
+    REQUIRE(count);
+    if (!count)
+      return false;
+    CHECK(*pending == (*count != 0));
+    if (!*count)
+      break;
+    auto accepted = destination.input(std::span{buffer}.first(*count));
+    REQUIRE(accepted);
+    if (!accepted)
+      return false;
+    ++drains;
+  }
+  REQUIRE(drains > 1);
+  if (drains <= 1)
+    return false;
+
+  for (int repeat = 0; repeat < 2; ++repeat) {
+    auto pending = source.has_output();
+    auto count = source.output(buffer);
+    REQUIRE(pending);
+    REQUIRE(count);
+    if (!pending || !count)
+      return false;
+    CHECK_FALSE(*pending);
+    CHECK(*count == 0);
+  }
+  return true;
+}
+
+TEST_CASE("TLS output accounting preserves partial drains and buffered close_notify")
 {
   fixture::Certificates certificates;
   const std::array versions{weave::TlsVersion::tls12, weave::TlsVersion::tls13};
@@ -389,11 +487,15 @@ TEST_CASE("TLS shutdown consumes buffered peer close_notify before requesting mo
       {.ca_file = certificates.ca, .min_version = version, .max_version = version});
     REQUIRE(server_credentials);
     REQUIRE(client_credentials);
+    if (!server_credentials || !client_credentials)
+      return;
 
     auto server = weave::detail::TlsEngine::create(*server_credentials, true, "");
     auto client = weave::detail::TlsEngine::create(*client_credentials, false, "localhost");
     REQUIRE(server);
     REQUIRE(client);
+    if (!server || !client)
+      return;
 
     bool server_ready = false;
     bool client_ready = false;
@@ -408,12 +510,185 @@ TEST_CASE("TLS shutdown consumes buffered peer close_notify before requesting mo
     }
     REQUIRE(server_ready);
     REQUIRE(client_ready);
+    if (!server_ready || !client_ready)
+      return;
 
-    REQUIRE(server->shutdown(false).action == weave::detail::TlsAction::ready);
-    transfer(*server, *client);
+    constexpr std::array message{std::byte{17}, std::byte{37}, std::byte{73}, std::byte{93}};
+    constexpr std::array next_message{std::byte{129}, std::byte{151}, std::byte{179}};
+    std::array<std::byte, message.size()> plaintext{};
+    auto waiting = client->read(plaintext);
+    REQUIRE(waiting.action == weave::detail::TlsAction::input);
+    if (waiting.action != weave::detail::TlsAction::input)
+      return;
+    auto needed = client->needs_input(waiting.generation);
+    REQUIRE(needed);
+    if (!needed)
+      return;
+    CHECK(*needed);
+
+    auto written = server->write(message);
+    REQUIRE(written.action == weave::detail::TlsAction::ready);
+    if (written.action != weave::detail::TlsAction::ready)
+      return;
+    CHECK(written.transferred == message.size());
+
+    written = server->write(next_message);
+    REQUIRE(written.action == weave::detail::TlsAction::ready);
+    if (written.action != weave::detail::TlsAction::ready)
+      return;
+    CHECK(written.transferred == next_message.size());
+
+    auto shutdown = server->shutdown(false);
+    REQUIRE(shutdown.action == weave::detail::TlsAction::ready);
+    if (shutdown.action != weave::detail::TlsAction::ready)
+      return;
+
+    // Both application records and close_notify arrive before any application read.
+    auto drained = transfer_small(*server, *client);
+    REQUIRE(drained);
+    if (!drained)
+      return;
+    needed = client->needs_input(waiting.generation);
+    REQUIRE(needed);
+    if (!needed)
+      return;
+    CHECK_FALSE(*needed);
+
+    auto read = client->read(plaintext);
+    REQUIRE(read.action == weave::detail::TlsAction::ready);
+    if (read.action != weave::detail::TlsAction::ready)
+      return;
+    CHECK(read.transferred == message.size());
+    CHECK(plaintext == message);
+    CHECK(read.generation != waiting.generation);
+    needed = client->needs_input(read.generation);
+    REQUIRE(needed);
+    if (!needed)
+      return;
+    CHECK(*needed);
+
+    const auto received_generation = read.generation;
+    std::array<std::byte, next_message.size()> next_plaintext{};
+    read = client->read(next_plaintext);
+    REQUIRE(read.action == weave::detail::TlsAction::ready);
+    if (read.action != weave::detail::TlsAction::ready)
+      return;
+    CHECK(read.transferred == next_message.size());
+    CHECK(next_plaintext == next_message);
+    CHECK(read.generation == received_generation);
+
+    auto pending = client->has_output();
+    REQUIRE(pending);
+    if (!pending)
+      return;
+    CHECK_FALSE(*pending);
 
     // No more transport bytes will arrive. The next attempt must consume existing input.
-    REQUIRE(client->shutdown(true).action == weave::detail::TlsAction::output);
+    shutdown = client->shutdown(true);
+    REQUIRE(shutdown.action == weave::detail::TlsAction::output);
+    if (shutdown.action != weave::detail::TlsAction::output)
+      return;
     CHECK(client->shutdown(true).action == weave::detail::TlsAction::ready);
+    pending = client->has_output();
+    REQUIRE(pending);
+    if (!pending)
+      return;
+    REQUIRE(*pending);
+    if (!*pending)
+      return;
+
+    // A live terminal error takes precedence over the queued client close_notify.
+    const auto error = std::make_error_code(std::errc::operation_canceled);
+    client->fail(error);
+    auto failed_pending = client->has_output();
+    std::array<std::byte, 3> unused;
+    auto failed_output = client->output(unused);
+    REQUIRE_FALSE(failed_pending);
+    REQUIRE_FALSE(failed_output);
+    if (failed_pending || failed_output)
+      return;
+    CHECK(failed_pending.error() == error);
+    CHECK(failed_output.error() == error);
+  }
+}
+
+TEST_CASE("TLS I/O boundaries clear stale and zero-code OpenSSL errors")
+{
+  fixture::Certificates certificates;
+  const std::array versions{weave::TlsVersion::tls12, weave::TlsVersion::tls13};
+  const std::array zero_code_slots{false, true};
+  const std::array write_first_modes{false, true};
+  constexpr std::array<weave::u8, 6> malformed{0x16, 0x02, 0x00, 0x00, 0x01, 0x00};
+
+  for (auto version : versions) {
+    auto credentials = weave::TlsContext::client(
+      {.ca_file = certificates.ca, .min_version = version, .max_version = version});
+    REQUIRE(credentials);
+    if (!credentials)
+      return;
+
+    for (bool zero_code : zero_code_slots) {
+      for (bool write_first : write_first_modes) {
+        CAPTURE(static_cast<int>(version));
+        CAPTURE(zero_code);
+        CAPTURE(write_first);
+        auto engine = weave::detail::TlsEngine::create(*credentials, false, "localhost");
+        REQUIRE(engine);
+        if (!engine)
+          return;
+
+        auto seed_errors = [zero_code] {
+          ERR_clear_error();
+          if (zero_code)
+            ERR_new();
+          else
+            ERR_raise(ERR_LIB_USER, 1);
+        };
+        std::array<std::byte, 1> plaintext{};
+        std::array<std::byte, 32768> ciphertext{};
+
+        seed_errors();
+        auto waiting = write_first ? engine->write(plaintext) : engine->read(plaintext);
+        REQUIRE(waiting.action == weave::detail::TlsAction::input);
+        if (waiting.action != weave::detail::TlsAction::input)
+          return;
+        // Unlike peek, pop also observes an occupied slot whose error code is zero.
+        CHECK(ERR_pop() == 0);
+
+        seed_errors();
+        auto count = engine->output(ciphertext);
+        REQUIRE(count);
+        if (!count)
+          return;
+        REQUIRE(*count >= 6);
+        if (*count < 6)
+          return;
+        CHECK(ciphertext[0] == std::byte{0x16});
+        CHECK(ciphertext[5] == std::byte{0x01});
+        CHECK(ERR_pop() == 0);
+
+        seed_errors();
+        auto accepted = engine->input(std::as_bytes(std::span{malformed}));
+        REQUIRE(accepted);
+        if (!accepted)
+          return;
+        CHECK(ERR_pop() == 0);
+
+        seed_errors();
+        auto failed = write_first ? engine->write(plaintext) : engine->read(plaintext);
+        REQUIRE(failed.action == weave::detail::TlsAction::failed);
+        if (failed.action != weave::detail::TlsAction::failed)
+          return;
+        const auto native_error = ERR_peek_last_error();
+        CHECK(native_error != 0);
+        CHECK(ERR_GET_LIB(native_error) == ERR_LIB_SSL);
+        CHECK(std::string_view{failed.error.category().name()} == "openssl");
+        CHECK(static_cast<unsigned int>(failed.error.value()) == native_error);
+        auto retry = engine->read(plaintext);
+        CHECK(retry.action == weave::detail::TlsAction::failed);
+        CHECK(retry.error == failed.error);
+        ERR_clear_error();
+      }
+    }
   }
 }

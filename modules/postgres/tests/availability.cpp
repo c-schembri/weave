@@ -38,6 +38,11 @@ static void check(bool condition)
 static void outcome(const weave::Result<pg::ServerStatus> &result, std::string_view mode)
 {
   if (mode == "cancel" || mode == "pre_cancel" || mode == "cancel_recovery") {
+    if (result) {
+      std::fprintf(stderr, "Cancellation returned health status %d\n", static_cast<int>(*result));
+    } else if (result.error() != std::errc::operation_canceled) {
+      std::fprintf(stderr, "Cancellation returned %s:%d\n", result.error().category().name(), result.error().value());
+    }
     check(!result && result.error() == std::errc::operation_canceled);
   } else if (mode.starts_with("invalid_")) {
     check(!result && result.error() == std::errc::invalid_argument);

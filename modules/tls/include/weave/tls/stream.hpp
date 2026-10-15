@@ -4,8 +4,11 @@
 #include <weave/semaphore.hpp>
 #include <weave/timer.hpp>
 #include <weave/tls/detail/engine.hpp>
+#include <weave/tcp/detail/read.hpp>
 #include <array>
 #include <algorithm>
+#include <memory>
+#include <type_traits>
 
 namespace weave {
 
@@ -48,34 +51,46 @@ class TlsStream {
   template <CancellableStream T>
   friend Task<TlsStream<T>> tls::server(T, TlsContext, TlsHandshakeOptions);
 
+  // Encrypted records include framing/authentication overhead beyond their 16 KiB plaintext.
+  using WriteBuffer = std::array<std::byte, 17 * 1024>;
+  using ReadBuffer = std::array<std::byte, 16384>;
+
   S transport_;
   detail::TlsEngine engine_;
   Semaphore send_{1};
   Semaphore receive_{1};
+  std::unique_ptr<WriteBuffer> write_buffer_;
+  std::unique_ptr<ReadBuffer> read_buffer_;
 
   TlsStream(S transport, detail::TlsEngine engine) noexcept
       : transport_(std::move(transport)), engine_(std::move(engine))
   {
   }
 
+  // Keep synchronous failure cleanup out of every suspended I/O frame.
+#if defined(_MSC_VER)
+  __declspec(noinline)
+#else
+  [[gnu::noinline]]
+#endif
   void poison(Error error) noexcept
   {
     engine_.fail(error);
     static_cast<void>(transport_.cancel());
   }
 
-  Task<void> flush(bool send_barrier)
+  Task<void> flush()
   {
-    if (!send_barrier) {
-      auto pending = engine_.has_output();
-      if (!pending)
-        co_await fail(pending.error());
-      if (!*pending)
-        co_return;
+    co_await cancellation_point();
+    auto acquired = send_.try_acquire();
+    if (!acquired && acquired.error() != std::errc::resource_unavailable_try_again)
+      co_await fail(acquired.error());
+    auto permit = acquired ? std::move(*acquired) : co_await send_.acquire();
+    if (!write_buffer_) {
+      write_buffer_.reset(new (std::nothrow) WriteBuffer);
+      detail::require(write_buffer_ != nullptr);
     }
-
-    auto permit = co_await send_.acquire();
-    std::array<std::byte, 16384> buffer;
+    auto &buffer = *write_buffer_;
 
     for (;;) {
       auto count = engine_.output(buffer);
@@ -94,7 +109,11 @@ class TlsStream {
 
   Task<void> pull(u64 generation)
   {
-    auto permit = co_await receive_.acquire();
+    co_await cancellation_point();
+    auto acquired = receive_.try_acquire();
+    if (!acquired && acquired.error() != std::errc::resource_unavailable_try_again)
+      co_await fail(acquired.error());
+    auto permit = acquired ? std::move(*acquired) : co_await receive_.acquire();
 
     auto needed = engine_.needs_input(generation);
     if (!needed)
@@ -102,7 +121,11 @@ class TlsStream {
     if (!*needed)
       co_return;
 
-    std::array<std::byte, 16384> buffer;
+    if (!read_buffer_) {
+      read_buffer_.reset(new (std::nothrow) ReadBuffer);
+      detail::require(read_buffer_ != nullptr);
+    }
+    auto &buffer = *read_buffer_;
     auto received = co_await as_result(transport_.read(buffer));
     if (!received) {
       poison(received.error());
@@ -118,7 +141,7 @@ class TlsStream {
     }
   }
 
-  Task<void> progress(detail::TlsStep step, bool send_barrier = true)
+  Task<void> progress(detail::TlsStep step)
   {
     if (step.action == detail::TlsAction::failed) {
       poison(step.error);
@@ -126,7 +149,7 @@ class TlsStream {
     }
 
     // Never hold the transport write gate while waiting for transport input.
-    auto sent = co_await as_result(flush(send_barrier));
+    auto sent = co_await as_result(flush());
     if (!sent) {
       poison(sent.error());
       co_await fail(sent.error());
@@ -169,27 +192,123 @@ class TlsStream {
     }
   }
 
-  Task<std::size_t> read_some(std::span<std::byte> buffer)
+  Result<bool> check_read_progress(const detail::TlsStep &step, const CancelToken &cancel) noexcept
   {
+    if (step.action == detail::TlsAction::failed) {
+      poison(step.error);
+      return std::unexpected(step.error);
+    }
+    if (cancel.stop_requested()) {
+      const auto error = std::make_error_code(std::errc::operation_canceled);
+      poison(error);
+      return std::unexpected(error);
+    }
+
+    auto pending = engine_.has_output();
+    if (!pending)
+      poison(pending.error());
+    return pending;
+  }
+
+  Task<std::size_t> read_some(std::span<std::byte> buffer, bool acquire_operation = false)
+  {
+    co_await cancellation_point();
+
+    detail::TlsOperationGuard guard{engine_, detail::TlsOperation::read};
+    if (acquire_operation) {
+      if (auto result = guard.begin(); !result)
+        co_await fail(result.error());
+    }
+
     if (buffer.empty())
       co_return co_await transport_.read(buffer);
 
+    const auto cancel = co_await detail::GetCancellation{};
     for (;;) {
-      auto step = engine_.read(buffer);
-      // Reads with no outgoing records must not wait behind a backpressured writer.
-      // Writes still join the send gate even if another flush took their records.
-      co_await progress(step, false);
-
-      if (step.action == detail::TlsAction::eof)
-        co_return std::size_t{0};
-      if (step.action == detail::TlsAction::ready)
-        co_return step.transferred;
+      u64 generation = 0;
+      {
+        auto step = engine_.read(buffer);
+        // Reads with no outgoing records must not wait behind a backpressured writer.
+        // Writes still join the send gate even if another flush took their records.
+        auto pending = check_read_progress(step, cancel);
+        if (!pending)
+          co_await fail(pending.error());
+        if (*pending) {
+          auto sent = co_await as_result(flush());
+          if (!sent) {
+            poison(sent.error());
+            co_await fail(sent.error());
+          }
+        }
+        if (step.action == detail::TlsAction::eof)
+          co_return std::size_t{0};
+        if (step.action == detail::TlsAction::ready)
+          co_return step.transferred;
+        if (step.action != detail::TlsAction::input)
+          continue;
+        generation = step.generation;
+      }
+      {
+        Result<void> received;
+        {
+          const auto &current = co_await detail::GetCancellationReference{};
+          if (current.stop_requested())
+            received = std::unexpected(std::make_error_code(std::errc::operation_canceled));
+        }
+        if (received) {
+          // Release the receive permit before propagating a failure from this frame.
+          auto acquired = receive_.try_acquire();
+          if (!acquired) {
+            if (acquired.error() == std::errc::resource_unavailable_try_again)
+              received = co_await as_result(pull(generation));
+            else
+              received = std::unexpected(acquired.error());
+          } else {
+            auto permit = std::move(*acquired);
+            auto needed = engine_.needs_input(generation);
+            if (!needed) {
+              received = std::unexpected(needed.error());
+            } else if (*needed) {
+              if (!read_buffer_) {
+                read_buffer_.reset(new (std::nothrow) ReadBuffer);
+                detail::require(read_buffer_ != nullptr);
+              }
+              auto &ciphertext = *read_buffer_;
+              Result<std::size_t> read{std::size_t{0}};
+              if constexpr (std::is_same_v<S, TcpStream>) {
+                detail::TcpReadOperation operation{
+                  transport_,
+                  ciphertext,
+                  detail::TcpReadOperation::Cancellation::snapshot};
+                read = co_await operation;
+              } else {
+                read = co_await as_result(transport_.read(ciphertext));
+              }
+              if (!read) {
+                poison(read.error());
+                received = std::unexpected(read.error());
+              } else {
+                detail::require(*read <= ciphertext.size());
+                received = engine_.input(std::span{ciphertext}.first(*read));
+                if (!received)
+                  poison(received.error());
+              }
+            }
+          }
+        }
+        if (!received) {
+          poison(received.error());
+          co_await fail(received.error());
+        }
+      }
     }
   }
 
 public:
   /// Move an idle stream; moving while an engine operation is active violates the contract.
-  TlsStream(TlsStream &&other) noexcept : transport_(take_transport(other)), engine_(std::move(other.engine_))
+  TlsStream(TlsStream &&other) noexcept
+      : transport_(take_transport(other)), engine_(std::move(other.engine_)),
+        write_buffer_(std::move(other.write_buffer_)), read_buffer_(std::move(other.read_buffer_))
   {
   }
 
@@ -205,13 +324,7 @@ public:
   /// Raw transport EOF without close_notify is truncation, not authenticated shutdown.
   Task<std::size_t> read(std::span<std::byte> buffer)
   {
-    co_await cancellation_point();
-
-    detail::TlsOperationGuard guard{engine_, detail::TlsOperation::read};
-    if (auto result = guard.begin(); !result)
-      co_await fail(result.error());
-
-    co_return co_await read_some(buffer);
+    return read_some(buffer, true);
   }
 
   /// Fill borrowed storage; premature authenticated EOF fails with connection_reset.
@@ -255,7 +368,16 @@ public:
     while (!buffer.empty()) {
       auto chunk = buffer.first((std::min)(buffer.size(), std::size_t{16384}));
       auto step = engine_.write(chunk);
-      co_await progress(step);
+      if (step.action == detail::TlsAction::ready) {
+        // Successful writes still join the transport barrier, even if its output was already taken.
+        auto sent = co_await as_result(flush());
+        if (!sent) {
+          poison(sent.error());
+          co_await fail(sent.error());
+        }
+      } else {
+        co_await progress(step);
+      }
 
       if (step.action == detail::TlsAction::ready) {
         detail::require(step.transferred > 0 && step.transferred <= chunk.size());

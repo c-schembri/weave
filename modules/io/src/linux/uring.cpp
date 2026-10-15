@@ -21,9 +21,25 @@ Error native_error(int code)
   return {code, std::generic_category()};
 }
 
-io_uring_sqe *next_entry(io_uring &ring) noexcept
+bool socket_has_data([[maybe_unused]] const io_uring_cqe &completion) noexcept
 {
+#if defined(IORING_CQE_F_SOCK_NONEMPTY)
+  return (completion.flags & IORING_CQE_F_SOCK_NONEMPTY) != 0;
+#else
+  return false;
+#endif
+}
+
+void flush(Context &context) noexcept;
+
+io_uring_sqe *next_entry(Context &context) noexcept
+{
+  auto &ring = detail::IoAccess::state(context).ring_;
   auto *entry = io_uring_get_sqe(&ring);
+  if (!entry) {
+    flush(context);
+    entry = io_uring_get_sqe(&ring);
+  }
   detail::require(entry != nullptr);
   return entry;
 }
@@ -47,7 +63,7 @@ void flush(Context &context) noexcept
     io_uring_cqe *completion;
     io_uring_for_each_cqe(&state.ring_, head, completion)
     {
-      state.buffered_completions_.push_back({completion->user_data, completion->res});
+      state.buffered_completions_.push_back({completion->user_data, completion->res, socket_has_data(*completion)});
       ++count;
     }
     detail::require(count != 0);
@@ -55,7 +71,7 @@ void flush(Context &context) noexcept
   }
 }
 
-bool buffered(Context &context, u64 &key, int &result) noexcept
+bool buffered(Context &context, u64 &key, int &result, bool &socket_nonempty) noexcept
 {
   auto &state = detail::IoAccess::state(context);
   if (state.next_completion_ == state.buffered_completions_.size())
@@ -63,6 +79,7 @@ bool buffered(Context &context, u64 &key, int &result) noexcept
   const auto completion = state.buffered_completions_[state.next_completion_++];
   key = completion.key;
   result = completion.result;
+  socket_nonempty = completion.socket_nonempty;
   if (state.next_completion_ == state.buffered_completions_.size()) {
     state.buffered_completions_.clear();
     state.next_completion_ = 0;
@@ -73,13 +90,13 @@ bool buffered(Context &context, u64 &key, int &result) noexcept
 void arm_wake(Context &context) noexcept
 {
   auto &state = detail::IoAccess::state(context);
-  auto *entry = next_entry(state.ring_);
+  auto *entry = next_entry(context);
   io_uring_prep_read(entry, state.wake_fd_, &state.wake_value_, sizeof(state.wake_value_), 0);
   io_uring_sqe_set_data64(entry, wake_key);
   flush(context);
 }
 
-void finish(detail::Operation &operation) noexcept
+void finish(detail::Operation &operation, bool from_cqe = false) noexcept
 {
   auto &state = detail::IoAccess::state(*operation.context);
   {
@@ -90,6 +107,11 @@ void finish(detail::Operation &operation) noexcept
     state.operations_.pop_back();
   }
   // Publication is the final access; a different worker can destroy the frame.
+  auto *executor = operation.event.executor;
+  if (from_cqe && executor && executor->dispatch_completion) {
+    executor->dispatch_completion(operation.event);
+    return;
+  }
   detail::post(*operation.context, operation.event);
 }
 
@@ -112,7 +134,7 @@ void submit_native(void *address) noexcept
       if (operation.kind == detail::Operation::Kind::send)
         detail::IoAccess::count(*operation.context, state.metrics_.write_calls);
 #endif
-      auto *entry = next_entry(state.ring_);
+      auto *entry = next_entry(*operation.context);
       operation.prepare(entry, operation);
       io_uring_sqe_set_data(entry, &operation);
       operation.submitted = true;
@@ -143,8 +165,7 @@ void cancel_native(void *address) noexcept
     if (done) {
       operation.cancel_pending = false;
     } else {
-      auto &ring = detail::IoAccess::state(*operation.context).ring_;
-      auto *entry = next_entry(ring);
+      auto *entry = next_entry(*operation.context);
       const auto key = reinterpret_cast<u64>(&operation);
       io_uring_prep_cancel64(entry, key, 0);
       io_uring_sqe_set_data64(entry, key | cancel_bit);
@@ -155,7 +176,7 @@ void cancel_native(void *address) noexcept
     finish(operation);
 }
 
-void complete(Context &context, u64 key, int result) noexcept
+void complete(Context &context, u64 key, int result, bool socket_nonempty) noexcept
 {
   const bool cancel = (key & cancel_bit) != 0;
   auto &operation = *reinterpret_cast<detail::Operation *>(key & ~cancel_bit);
@@ -169,13 +190,14 @@ void complete(Context &context, u64 key, int result) noexcept
     } else {
       operation.result = result;
       operation.native_done = true;
+      operation.socket_nonempty = socket_nonempty;
       auto &state = detail::IoAccess::state(context);
       detail::IoAccess::count(context, state.metrics_.completed);
     }
     done = operation.native_done && !operation.cancel_pending;
   }
   if (done)
-    finish(operation);
+    finish(operation, true);
 }
 
 } // namespace
@@ -312,7 +334,19 @@ Result<Context> detail::IoAccess::create_context(ContextOptions options, unsigne
   require(impl != nullptr);
   impl->options_ = options;
   io_uring_params parameters{};
-  const auto created = io_uring_queue_init_params(entries, &impl->ring_, &parameters);
+  parameters.flags = IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN | IORING_SETUP_COOP_TASKRUN |
+    IORING_SETUP_TASKRUN_FLAG;
+  auto created = io_uring_queue_init_params(entries, &impl->ring_, &parameters);
+  if (created == -EINVAL) {
+    parameters = {};
+    parameters.flags = IORING_SETUP_COOP_TASKRUN | IORING_SETUP_TASKRUN_FLAG;
+    created = io_uring_queue_init_params(entries, &impl->ring_, &parameters);
+  }
+  if (created == -EINVAL) {
+    // Preserve the existing 5.11+ capability boundary on older kernels.
+    parameters = {};
+    created = io_uring_queue_init_params(entries, &impl->ring_, &parameters);
+  }
   if (created < 0)
     return std::unexpected(native_error(-created));
 
@@ -345,7 +379,7 @@ Context::~Context()
   detail::require(impl_->ready_first_ == nullptr && impl_->operations_.empty() && impl_->timers_.heap.empty());
 
   // Closing a descriptor does not cancel io_uring requests. Drain the wake read too.
-  auto *entry = next_entry(impl_->ring_);
+  auto *entry = next_entry(*this);
   io_uring_prep_cancel64(entry, wake_key, 0);
   io_uring_sqe_set_data64(entry, wake_cancel_key);
   flush(*this);
@@ -353,7 +387,8 @@ Context::~Context()
   while (drained != 2) {
     u64 key;
     int bytes;
-    if (buffered(*this, key, bytes)) {
+    bool socket_nonempty;
+    if (buffered(*this, key, bytes, socket_nonempty)) {
       detail::require(key == wake_key || key == wake_cancel_key);
       ++drained;
       continue;
@@ -407,6 +442,12 @@ void Context::request_stop() noexcept
     std::lock_guard lock(impl_->submissions_);
     impl_->closing_ = true;
     wake = !impl_->stopping_.exchange(true, std::memory_order_acq_rel);
+  }
+  if (wake) {
+    // The registry pins native storage until completion and also covers shielded tasks.
+    std::lock_guard lock(impl_->io_mutex_);
+    for (auto *operation : impl_->operations_)
+      detail::IoAccess::cancel(*operation);
   }
   impl_->stop_source_.cancel();
   if (wake)
@@ -566,12 +607,20 @@ void detail::IoAccess::submit(Operation &operation) noexcept
   {
     std::lock_guard lock(state.io_mutex_);
     state.operations_.push_back(&operation);
+    // Pair admission with the one-time shutdown scan under the same registry lock.
+    if (state.stopping_.load(std::memory_order_acquire)) {
+      std::lock_guard operation_lock(operation.mutex);
+      operation.cancelled = true;
+    }
   }
   operation.submission.state = &operation;
   operation.submission.invoke = submit_native;
   operation.cancellation.state = &operation;
   operation.cancellation.invoke = cancel_native;
-  {
+  if (current_context == operation.context) {
+    // The ring owner can submit directly; migrated operations still route through its queue.
+    submit_native(&operation);
+  } else {
     std::lock_guard lock(operation.mutex);
     ContextAccess::post(*operation.context, operation.submission);
   }
@@ -599,7 +648,7 @@ void detail::IoAccess::cancel_socket(Context &context, int socket) noexcept
 
 void Context::cancel_pending() noexcept
 {
-  // Each operation observes the Context token, including shielded tasks.
+  // request_stop scans once; later admissions observe stopping under the registry lock.
 }
 
 void Context::post(detail::Posted &message) noexcept
@@ -660,13 +709,14 @@ void Context::poll(bool wait)
     for (unsigned n = 0; n < 64; ++n) {
       u64 key;
       int bytes;
-      if (!buffered(*this, key, bytes))
+      bool socket_nonempty;
+      if (!buffered(*this, key, bytes, socket_nonempty))
         break;
       if (key == wake_key) {
         detail::require(bytes == sizeof(impl_->wake_value_));
         arm_wake(*this);
       } else {
-        complete(*this, key, bytes);
+        complete(*this, key, bytes, socket_nonempty);
       }
     }
     return;
@@ -697,12 +747,13 @@ void Context::poll(bool wait)
   for (unsigned n = 0; n < 64; ++n) {
     const auto key = completion->user_data;
     const auto bytes = completion->res;
+    const auto socket_nonempty = socket_has_data(*completion);
     io_uring_cqe_seen(&impl_->ring_, completion);
     if (key == wake_key) {
       detail::require(bytes == sizeof(impl_->wake_value_));
       arm_wake(*this);
     } else {
-      complete(*this, key, bytes);
+      complete(*this, key, bytes, socket_nonempty);
     }
     result = io_uring_peek_cqe(&impl_->ring_, &completion);
     if (result == -EAGAIN)

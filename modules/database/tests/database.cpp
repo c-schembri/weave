@@ -85,18 +85,36 @@ static_assert(!DecodableShipment<const NativeRow>);
 struct HeapCounters {
   std::size_t allocations = 0;
   std::size_t frees = 0;
+  std::size_t retained = 0;
 };
 
 static void *allocate(void *state, std::size_t size, std::size_t alignment) noexcept
 {
-  ++static_cast<HeapCounters *>(state)->allocations;
+  auto &counters = *static_cast<HeapCounters *>(state);
+  ++counters.allocations;
+  counters.retained += size;
   return weave::db::detail::ResultHeap::reserve(nullptr, size, alignment);
 }
 
 static void deallocate(void *state, void *data, std::size_t size, std::size_t alignment) noexcept
 {
-  ++static_cast<HeapCounters *>(state)->frees;
+  auto &counters = *static_cast<HeapCounters *>(state);
+  ++counters.frees;
+  weave::detail::require(size <= counters.retained);
+  counters.retained -= size;
   weave::db::detail::ResultHeap::release(nullptr, data, size, alignment);
+}
+
+static HeapCounters null_state_counters;
+
+static void *allocate_null_state(void *, std::size_t size, std::size_t alignment) noexcept
+{
+  return allocate(&null_state_counters, size, alignment);
+}
+
+static void deallocate_null_state(void *, void *data, std::size_t size, std::size_t alignment) noexcept
+{
+  deallocate(&null_state_counters, data, size, alignment);
 }
 
 } // namespace fixture
@@ -105,6 +123,167 @@ template <>
 struct weave::db::RowTraits<fixture::Alias> {
   static constexpr auto fields = std::tuple{weave::db::field("id", &fixture::Alias::key)};
 };
+
+TEST_CASE("lazy arena bookkeeping shares its first allocation without freeing live blocks")
+{
+  namespace storage = weave::db::detail;
+  const std::array alignments{std::size_t{1}, std::size_t{8}, std::size_t{64}, std::size_t{256}};
+  const std::array sizes{std::size_t{0}, std::size_t{1}, std::size_t{64}, std::size_t{4096}};
+  for (auto alignment : alignments) {
+    for (auto size : sizes) {
+      CAPTURE(alignment);
+      CAPTURE(size);
+      fixture::HeapCounters counters;
+      auto first = storage::ResultStorage::allocate_first(
+        {&counters, fixture::allocate, fixture::deallocate},
+        size,
+        alignment);
+      CHECK(counters.allocations == 1);
+      CHECK(first.storage->bytes() == counters.retained);
+      CHECK(reinterpret_cast<std::uintptr_t>(first.data) % alignment == 0);
+      if (size)
+        std::memset(first.data, 17, size);
+
+      auto *second = first.storage->allocate(33, 64);
+      CHECK(counters.allocations == 2);
+      CHECK(first.storage->bytes() == counters.retained);
+      CHECK(reinterpret_cast<std::uintptr_t>(second) % 64 == 0);
+      std::memset(second, 43, 33);
+
+      first.storage->release();
+      CHECK(counters.frees == 0);
+      if (size)
+        CHECK(static_cast<const unsigned char *>(first.data)[size - 1] == 17);
+      storage::ResultStorage::deallocate(first.data);
+      CHECK(counters.frees == 0);
+      CHECK(static_cast<const unsigned char *>(second)[32] == 43);
+      storage::ResultStorage::deallocate(second);
+      CHECK(counters.frees == 2);
+      CHECK(counters.retained == 0);
+    }
+  }
+}
+
+TEST_CASE("standard arena small copies stay lazy and grow independently of their source")
+{
+  namespace storage = weave::db::detail;
+  std::optional<storage::ResultText> copied_text;
+  std::optional<storage::ResultList<weave::u64>> copied_empty;
+  {
+    auto arena = storage::ResultArena::create();
+    auto fresh = arena.fresh();
+    CHECK(fresh.identity() == nullptr);
+    CHECK(fresh.bytes() == 0);
+
+    storage::ResultText text{"tiny", storage::ResultAllocator<char>{arena}};
+    storage::ResultList<weave::u64> empty{storage::ResultAllocator<weave::u64>{arena}};
+    const auto source_bytes = arena.bytes();
+    copied_text.emplace(text);
+    copied_empty.emplace(empty);
+    REQUIRE(copied_text);
+    REQUIRE(copied_empty);
+    if (!copied_text || !copied_empty)
+      return;
+    CHECK(*copied_text == "tiny");
+    CHECK(copied_empty->empty());
+
+    const bool debug_proxies =
+#if defined(_ITERATOR_DEBUG_LEVEL) && _ITERATOR_DEBUG_LEVEL > 0
+      true;
+#else
+      false;
+#endif
+    CHECK((copied_text->get_allocator().arena().identity() != nullptr) == debug_proxies);
+    CHECK((copied_empty->get_allocator().arena().identity() != nullptr) == debug_proxies);
+    if (!debug_proxies) {
+      CHECK(copied_text->get_allocator().arena().bytes() == 0);
+      CHECK(copied_empty->get_allocator().arena().bytes() == 0);
+    }
+    CHECK(copied_text->get_allocator().arena().identity() != arena.identity());
+    CHECK(copied_empty->get_allocator().arena().identity() != arena.identity());
+
+    copied_text->append(256, 'x');
+    copied_empty->assign(8, 84);
+    CHECK(arena.bytes() == source_bytes);
+    CHECK(text == "tiny");
+    CHECK(empty.empty());
+  }
+
+  REQUIRE(copied_text);
+  REQUIRE(copied_empty);
+  if (!copied_text || !copied_empty)
+    return;
+  std::string expected{"tiny"};
+  expected.append(256, 'x');
+  CHECK(std::string_view{*copied_text} == expected);
+  REQUIRE(copied_empty->size() == 8);
+  if (copied_empty->size() != 8)
+    return;
+  CHECK(copied_empty->back() == 84);
+}
+
+TEST_CASE("small custom arena copies retain eager provider policy after their source dies")
+{
+  namespace storage = weave::db::detail;
+  fixture::HeapCounters counters;
+  const storage::ResultHeap heap{&counters, fixture::allocate, fixture::deallocate};
+  std::optional<storage::ResultText> copied;
+  {
+    auto arena = storage::ResultArena::create(heap);
+    const auto before_fresh = counters.allocations;
+    auto fresh = arena.fresh();
+    CHECK(counters.allocations == before_fresh + 1);
+    CHECK(fresh.identity() != nullptr);
+    CHECK(fresh.identity() != arena.identity());
+    CHECK(fresh.heap().state == heap.state);
+    CHECK(fresh.heap().allocate == heap.allocate);
+    CHECK(fresh.heap().deallocate == heap.deallocate);
+
+    storage::ResultText text{"tiny", storage::ResultAllocator<char>{arena}};
+    copied.emplace(text);
+    REQUIRE(copied);
+    if (!copied)
+      return;
+    CHECK(copied->get_allocator().arena().identity() != nullptr);
+    CHECK(copied->get_allocator().arena().identity() != arena.identity());
+    const auto copied_heap = copied->get_allocator().arena().heap();
+    CHECK(copied_heap.state == heap.state);
+    CHECK(copied_heap.allocate == heap.allocate);
+    CHECK(copied_heap.deallocate == heap.deallocate);
+  }
+
+  REQUIRE(copied);
+  if (!copied)
+    return;
+  CHECK(*copied == "tiny");
+  copied->append(256, 'x');
+  std::string expected{"tiny"};
+  expected.append(256, 'x');
+  CHECK(std::string_view{*copied} == expected);
+  copied.reset();
+  CHECK(counters.allocations == counters.frees);
+  CHECK(counters.retained == 0);
+}
+
+TEST_CASE("null-state custom arena callbacks keep fresh copies eager")
+{
+  namespace storage = weave::db::detail;
+  fixture::null_state_counters = {};
+  const storage::ResultHeap heap{nullptr, fixture::allocate_null_state, fixture::deallocate_null_state};
+  {
+    auto arena = storage::ResultArena::create(heap);
+    const auto before_fresh = fixture::null_state_counters.allocations;
+    auto fresh = arena.fresh();
+    CHECK(fixture::null_state_counters.allocations == before_fresh + 1);
+    CHECK(fresh.identity() != nullptr);
+    CHECK(fresh.identity() != arena.identity());
+    CHECK(fresh.heap().state == nullptr);
+    CHECK(fresh.heap().allocate == heap.allocate);
+    CHECK(fresh.heap().deallocate == heap.deallocate);
+  }
+  CHECK(fixture::null_state_counters.allocations == fixture::null_state_counters.frees);
+  CHECK(fixture::null_state_counters.retained == 0);
+}
 
 TEST_CASE("portable record decoding leaves native codec and lifetimes to the row adapter")
 {
@@ -188,6 +367,32 @@ TEST_CASE("portable arena containers preserve allocator ownership and standard a
     CHECK(std::format("{}", moved[0]) == "a deliberately non-SSO result string");
     CHECK(std::hash<storage::ResultText>{}(moved[0]) == std::hash<std::string_view>{}(moved[0]));
     CHECK(arena.bytes() > sizeof(storage::ResultStorage));
+  }
+  CHECK(counters.allocations > 0);
+  CHECK(counters.allocations == counters.frees);
+}
+
+TEST_CASE("portable arena heaps preserve ordinary and over-aligned allocation across copies")
+{
+  namespace storage = weave::db::detail;
+
+  struct alignas(64) Value {
+    std::array<weave::u64, 8> numbers{};
+  };
+
+  fixture::HeapCounters counters;
+  {
+    auto arena = storage::ResultArena::create({&counters, fixture::allocate, fixture::deallocate});
+    storage::ResultList<Value> values{storage::ResultAllocator<Value>{arena}};
+    values.resize(3);
+    CHECK(reinterpret_cast<std::uintptr_t>(values.data()) % alignof(Value) == 0);
+    values[2].numbers[0] = 84;
+
+    auto copied = values;
+    CHECK(reinterpret_cast<std::uintptr_t>(copied.data()) % alignof(Value) == 0);
+    CHECK(copied.get_allocator().arena().identity() != arena.identity());
+    values.clear();
+    CHECK(copied[2].numbers[0] == 84);
   }
   CHECK(counters.allocations > 0);
   CHECK(counters.allocations == counters.frees);

@@ -1,4 +1,5 @@
 #include <weave/tcp.hpp>
+#include <weave/tcp/detail/read.hpp>
 #include "linux/uring.hpp"
 #include "linux/address.hpp"
 #include "linux/socket.hpp"
@@ -6,6 +7,8 @@
 #include <weave/resolve.hpp>
 #include <algorithm>
 #include <cerrno>
+#include <memory>
+#include <new>
 #include <netinet/tcp.h>
 #include <unistd.h>
 
@@ -66,6 +69,21 @@ struct TcpOperationFlag {
 };
 
 using TcpIoAwaiter = detail::SocketIoAwaiter;
+
+struct TcpReadState {
+  TcpOperationFlag guard;
+  TcpIoAwaiter operation;
+
+  TcpReadState(bool &reading, Context &context, int socket) noexcept
+      : guard(reading), operation(TcpIoAwaiter::receive, context, socket)
+  {
+  }
+};
+
+TcpReadState *read_state(std::byte *storage) noexcept
+{
+  return std::launder(reinterpret_cast<TcpReadState *>(storage));
+}
 
 Result<int> make_socket(Context &context, int family)
 {
@@ -250,6 +268,7 @@ TcpStream::TcpStream(TcpStream &&other) noexcept : ctx_(other.ctx_), socket_(inv
   detail::require(!other.reading_ && !other.writing_);
   socket_ = std::exchange(other.socket_, invalid_socket);
   skip_success_ = other.skip_success_;
+  receive_nonempty_ = other.receive_nonempty_;
 }
 
 TcpStream::~TcpStream()
@@ -398,22 +417,67 @@ Result<void> TcpStream::cancel()
 
 Task<std::size_t> TcpStream::read(std::span<std::byte> buffer)
 {
-  detail::IoAccess::check_execution(*ctx_);
-  if (reading_)
-    co_await fail(busy());
-  if (socket_ == invalid_socket)
-    co_await fail(native_error(EBADF));
-  if (buffer.empty())
-    co_return std::size_t{0};
-
-  TcpOperationFlag guard(reading_);
-  TcpIoAwaiter operation(TcpIoAwaiter::receive, *ctx_, static_cast<int>(socket_));
-  operation.buffer = buffer.data();
-  operation.size = static_cast<unsigned>(std::min(buffer.size(), std::size_t{65536}));
+  detail::TcpReadOperation operation(*this, buffer, detail::TcpReadOperation::Cancellation::borrow);
   auto result = co_await operation;
   if (!result)
     co_await fail(result.error());
   co_return *result;
+}
+
+detail::TcpReadOperation::TcpReadOperation(TcpStream &stream, std::span<std::byte> buffer, Cancellation policy) noexcept
+    : stream_(stream), buffer_(buffer), policy_(policy)
+{
+  static_assert(sizeof(TcpReadState) <= sizeof(storage_));
+  static_assert(alignof(TcpReadState) <= alignof(void *));
+}
+
+detail::TcpReadOperation::~TcpReadOperation()
+{
+  detail::require(!initialized_ || resumed_);
+  if (initialized_)
+    std::destroy_at(read_state(storage_.data()));
+}
+
+bool detail::TcpReadOperation::start(std::coroutine_handle<> continuation, const CancelToken &cancellation) noexcept
+{
+  detail::require(started_ && !initialized_ && !resumed_);
+
+  if (policy_ == Cancellation::snapshot && cancellation.stop_requested()) {
+    result_ = std::unexpected(std::make_error_code(std::errc::operation_canceled));
+    return false;
+  }
+
+  detail::IoAccess::check_execution(*stream_.ctx_);
+  if (stream_.reading_) {
+    result_ = std::unexpected(busy());
+    return false;
+  }
+  if (stream_.socket_ == invalid_socket) {
+    result_ = std::unexpected(native_error(EBADF));
+    return false;
+  }
+  if (buffer_.empty())
+    return false;
+
+  auto *state = std::construct_at(
+    reinterpret_cast<TcpReadState *>(storage_.data()),
+    stream_.reading_,
+    *stream_.ctx_,
+    static_cast<int>(stream_.socket_));
+  initialized_ = true;
+  state->operation.receive_nonempty = &stream_.receive_nonempty_;
+  state->operation.buffer = buffer_.data();
+  state->operation.size = static_cast<unsigned>(std::min(buffer_.size(), std::size_t{65536}));
+  return state->operation.await_suspend(continuation, cancellation);
+}
+
+Result<std::size_t> detail::TcpReadOperation::await_resume() noexcept
+{
+  detail::require(started_ && !resumed_);
+  if (initialized_)
+    result_ = read_state(storage_.data())->operation.await_resume();
+  resumed_ = true;
+  return result_;
 }
 
 Task<void> TcpStream::read_exactly(std::span<std::byte> buffer)
@@ -427,6 +491,7 @@ Task<void> TcpStream::read_exactly(std::span<std::byte> buffer)
   TcpOperationFlag guard(reading_);
   while (!buffer.empty()) {
     TcpIoAwaiter operation(TcpIoAwaiter::receive, *ctx_, static_cast<int>(socket_));
+    operation.receive_nonempty = &receive_nonempty_;
     operation.buffer = buffer.data();
     operation.size = static_cast<unsigned>(std::min(buffer.size(), std::size_t{65536}));
     auto result = co_await operation;

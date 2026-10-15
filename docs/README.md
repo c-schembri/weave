@@ -4,6 +4,7 @@ Start with the [project README](../README.md), then open the guide for the featu
 
 | Guide | Contents |
 | --- | --- |
+| [Features and roadmap](features.md) | High-level current capabilities, planned additions and scope boundaries |
 | [Build](build.md) | Requirements, CMake components, installation and Windows/Linux setup |
 | [JSON](json.md) | Glaze struct conversion, buffer APIs, diagnostics and validation boundaries |
 | [Execution](execution.md) | Context, Runtime, Tasks, ownership, cancellation and timers |
@@ -11,6 +12,7 @@ Start with the [project README](../README.md), then open the guide for the featu
 | [Synchronization](synchronization.md) | Bounded channels and semaphores |
 | [TLS](tls.md) | Verified connections, mTLS, sessions, revocation and credential policy |
 | [PostgreSQL](postgres.md) | Queries, results, streaming, COPY, pooling and blocking use |
+| [MySQL](mysql.md) | Prepared/text queries, streaming, pooling, blocking use and migrations |
 | [Migrations](migrations.md) | Schema DSL, per-file CMake registration, execution and recovery |
 | [PostgreSQL connections](postgres-connections.md) | Configuration, authentication, TLS modes, failover and cancellation |
 | [PostgreSQL advanced](postgres-advanced.md) | Pipelines, portals, mixed exchanges, replication and large objects |
@@ -28,7 +30,8 @@ Examples: [TCP echo](../modules/tcp/examples/echo/README.md),
 [database mapping](../modules/database/examples/mapping.cpp),
 [PostgreSQL simple struct](../modules/postgres/examples/queries/simple_struct.cpp),
 [PostgreSQL column aliases](../modules/postgres/examples/queries/shared_mapping.cpp),
-[PostgreSQL pooling](../modules/postgres/examples/connections/pool.cpp).
+[PostgreSQL pooling](../modules/postgres/examples/connections/pool.cpp),
+[MySQL usage](../modules/mysql/examples/README.md).
 
 Implementation diaries and superseded qualification notes remain in Git history,
 not in the user guide. Current guides describe supported contracts; tests are not

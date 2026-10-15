@@ -7,6 +7,8 @@ Async networking for C++23. Small APIs, explicit ownership, no exceptions.
 **Experimental, not production-certified.** Windows IOCP and Linux io_uring.
 No epoll or macOS backend.
 
+[Features and roadmap](docs/features.md): current capabilities and planned additions.
+
 ## Start Here
 
 A concurrent TCP echo server:
@@ -108,13 +110,18 @@ before releasing borrowed streams/buffers. [Scopes and timers](docs/execution.md
 ```cpp
 auto pool = co_await weave::pg::Pool::create(options);
 auto database = co_await pool.acquire();
-auto rows = co_await database->execute("SELECT 42");
+auto result = co_await database->execute("SELECT 42");
 // The lease returns automatically at scope exit.
 ```
 
 Include `<weave/postgres.hpp>`. Queries, prepared statements, batching, COPY,
 streaming and blocking use share the same engine.
 [PostgreSQL API and pooling](docs/postgres.md) / [libpq compatibility](docs/postgres-api-audit.md).
+
+**MySQL:** native protocol over verified TLS, prepared statements, streaming,
+batching, pooling and blocking calls, with shared primitive/struct decoding.
+Include `<weave/mysql.hpp>`. [MySQL API and limits](docs/mysql.md) /
+[complete examples](modules/mysql/examples/README.md). Not full native-client parity.
 
 **Migrations:** explicit schema DSL, one C++ file per version, CMake-generated
 registration without Python. [API and recovery](docs/migrations.md).
@@ -142,6 +149,7 @@ Include/link only what you need. TCP does not require Runtime.
 | Channels/semaphores | `<weave/sync.hpp>` | `weave::sync` |
 | TLS (OpenSSL 3.5+) | `<weave/tls.hpp>` | `weave::tls` |
 | PostgreSQL (also ICU 70+) | `<weave/postgres.hpp>` | `weave::postgres` |
+| MySQL (TLS dependencies only) | `<weave/mysql.hpp>` | `weave::mysql` |
 
 ```cmake
 set(WEAVE_MODULES "tcp;runtime" CACHE STRING "" FORCE)

@@ -9,6 +9,7 @@
 | Linux networking | GCC 14+, glibc, liburing 2.3+, pkg-config |
 | TLS | Separately installed, security-patched OpenSSL 3.5+ |
 | PostgreSQL | TLS dependencies, ICU 70+, a C compiler for private vendored parsers |
+| MySQL | TLS dependencies; no native MySQL client SDK |
 | Tests / automation | Python 3.11+; standard library only |
 | Optional Tokio comparison | Rust toolchain |
 
@@ -33,6 +34,7 @@ other modules are static libraries. Database depends only on Core. Its private a
 pool support uses IO/Sync without becoming an installed component. TCP does not
 require Runtime, and Runtime does not require TCP. TLS adds TCP/Sync/OpenSSL;
 PostgreSQL adds Database, private JSON parsing, TLS, private local transport, OpenSSL Crypto and ICU.
+MySQL adds Database and TLS, with private OpenSSL Crypto authentication; it does not depend on PostgreSQL or Runtime.
 JSON uses pinned vendored Glaze headers; no consumer fetch or separately installed package is required.
 There is no all-features umbrella target or shared-library ABI/export support.
 
@@ -57,8 +59,8 @@ find_package(weave CONFIG REQUIRED COMPONENTS tcp)
 target_link_libraries(my_app PRIVATE weave::tcp)
 ```
 
-Components are `core`, `json`, `database`, `io`, `runtime`, `tcp`, `local`, `sync`, `tls` and
-`postgres`; each exports `weave::<component>`. Weave's public headers are self-contained
+Components are `core`, `json`, `database`, `io`, `runtime`, `tcp`, `local`, `sync`, `tls`,
+`postgres` and `mysql`; each exports `weave::<component>`. Weave's public headers are self-contained
 and have no native OS header dependency.
 
 Consumers must deploy shared OpenSSL/ICU runtime libraries. Development targets
@@ -78,8 +80,8 @@ ctest --preset postgres-debug --label-exclude benchmark --no-tests=error
 | --- | --- | --- |
 | `windows-ci` | `ci-debug`, `ci-release` | Base networking, tests and examples; no benchmarks |
 | `windows-tls` | `tls-debug`, `tls-release` | Adds TLS |
-| `windows-postgres` | `postgres-debug`, `postgres-release` | Adds PostgreSQL |
-| `asan-postgres` | `asan-postgres` | Release AddressSanitizer, including PostgreSQL |
+| `windows-postgres` | `postgres-debug`, `postgres-release` | Adds PostgreSQL and MySQL |
+| `asan-postgres` | `asan-postgres` | Release AddressSanitizer, including PostgreSQL and MySQL |
 | `windows-runtime-bench` | `runtime-bench` (build only) | Local runtime comparisons |
 | `windows` | `debug`, `release` | Full developer suite and comparison dependencies |
 
@@ -100,8 +102,9 @@ ctest --preset linux-debug --no-tests=error
 
 Distribution OpenSSL must meet the version requirement. Use `linux-release`
 or `linux-asan` for other configurations. These presets include TLS, not
-PostgreSQL; add `-DWEAVE_MODULES="postgres;runtime"` and the required dependencies
-to include PostgreSQL. No macOS backend is implemented.
+database clients; add `-DWEAVE_MODULES="mysql;runtime"` for MySQL or
+`-DWEAVE_MODULES="postgres;mysql;runtime"` for both drivers and their dependencies.
+No macOS backend is implemented.
 
 WSL uses the real Linux backend. Prefer a Linux-filesystem build directory when
 source is under `/mnt/c`:

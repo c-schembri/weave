@@ -38,6 +38,14 @@ struct detail::TlsPasswordAccess {
 
 namespace {
 
+void clear_io_errors() noexcept
+{
+  // ERR_pop detects occupied zero-code slots too, unlike ERR_peek_error.
+  // Leave inactive slots alone when this thread's error stack is already empty.
+  if (ERR_pop())
+    ERR_clear_error();
+}
+
 struct PasswordCleanup {
   std::string &password;
   char *data = password.data();
@@ -695,6 +703,8 @@ struct detail::TlsEngine::Impl {
 
   mutable std::mutex mutex;
   Error error;
+  // Reuse the default success category without querying it on each SSL step.
+  const Error success{};
   bool reading = false;
   bool writing = false;
   bool exclusive = false;
@@ -712,6 +722,8 @@ struct detail::TlsEngine::Impl {
   SSL_SESSION *captured_source = nullptr;
   std::shared_ptr<TlsSessionState> resumed;
   u64 generation = 0;
+  // SSL I/O refreshes this count; output() drains the caller-configured memory BIO.
+  std::size_t queued_output = 0;
 
   static void observe_client_identity(
     int writing,
@@ -761,26 +773,31 @@ struct detail::TlsEngine::Impl {
   {
     // Capture SSL_get_error before any intervening OpenSSL/BIO calls.
     const auto code = result == 1 ? SSL_ERROR_NONE : SSL_get_error(ssl, result);
-    const auto native_error = result == 1 ? Error{} : openssl_error();
-    if (auto logging = tls_key_log_error(*credentials); logging) {
-      error = logging;
-      revoke_session();
-      return {TlsAction::failed, 0, error, generation};
+    const bool needs_native_error = result != 1 && code != SSL_ERROR_WANT_READ && code != SSL_ERROR_WANT_WRITE &&
+      code != SSL_ERROR_ZERO_RETURN;
+    const auto native_error = needs_native_error ? openssl_error() : success;
+    if (credentials->key_log) {
+      if (auto logging = tls_key_log_error(*credentials); logging) {
+        error = logging;
+        revoke_session();
+        return {TlsAction::failed, 0, error, generation};
+      }
     }
-    if (BIO_ctrl_pending(SSL_get_wbio(ssl)) > credentials->limits.buffered_output) {
+    queued_output = BIO_ctrl_pending(SSL_get_wbio(ssl));
+    if (queued_output > credentials->limits.buffered_output) {
       error = make_error_code(TlsError::resource_limit);
       revoke_session();
       return {TlsAction::failed, 0, error, generation};
     }
     if (result == 1)
-      return {TlsAction::ready, transferred, {}, generation};
+      return {TlsAction::ready, transferred, success, generation};
 
     if (code == SSL_ERROR_WANT_READ && !input_eof)
-      return {TlsAction::input, 0, {}, generation};
+      return {TlsAction::input, 0, success, generation};
     if (code == SSL_ERROR_WANT_WRITE)
-      return {TlsAction::output, 0, {}, generation};
+      return {TlsAction::output, 0, success, generation};
     if (code == SSL_ERROR_ZERO_RETURN)
-      return {TlsAction::eof, 0, {}, generation};
+      return {TlsAction::eof, 0, success, generation};
 
     if ((credentials->server || credentials->verification != TlsVerification::none) &&
       SSL_get_verify_result(ssl) != X509_V_OK)
@@ -1019,7 +1036,7 @@ detail::TlsStep detail::TlsEngine::read(std::span<std::byte> buffer) noexcept
   if (impl_->error)
     return {TlsAction::failed, 0, impl_->error};
 
-  ERR_clear_error();
+  clear_io_errors();
   std::size_t count = 0;
   const auto result = SSL_read_ex(impl_->ssl, buffer.data(), buffer.size(), &count);
 
@@ -1032,7 +1049,7 @@ detail::TlsStep detail::TlsEngine::write(std::span<const std::byte> buffer) noex
   if (impl_->error)
     return {TlsAction::failed, 0, impl_->error};
 
-  ERR_clear_error();
+  clear_io_errors();
   std::size_t count = 0;
   const auto result = SSL_write_ex(impl_->ssl, buffer.data(), buffer.size(), &count);
   auto step = impl_->step(result, count);
@@ -1051,15 +1068,17 @@ detail::TlsStep detail::TlsEngine::shutdown(bool wait_peer) noexcept
   if (impl_->error)
     return {TlsAction::failed, 0, impl_->error};
   if (!wait_peer && (SSL_get_shutdown(impl_->ssl) & SSL_SENT_SHUTDOWN))
-    return {TlsAction::ready};
+    return {TlsAction::ready, 0, impl_->success};
 
   ERR_clear_error();
   const auto result = SSL_shutdown(impl_->ssl);
 
   // The first zero return sends close_notify without attempting peer input.
   // Flush and retry so an already-buffered notification is consumed first.
-  if (result == 0)
-    return {wait_peer ? TlsAction::output : TlsAction::ready, 0, {}, impl_->generation};
+  if (result == 0) {
+    impl_->queued_output = BIO_ctrl_pending(SSL_get_wbio(impl_->ssl));
+    return {wait_peer ? TlsAction::output : TlsAction::ready, 0, impl_->success, impl_->generation};
+  }
 
   auto step = impl_->step(result);
   if (step.action == TlsAction::eof)
@@ -1074,7 +1093,7 @@ Result<bool> detail::TlsEngine::has_output() const noexcept
   if (impl_->error)
     return std::unexpected(impl_->error);
 
-  return BIO_ctrl_pending(SSL_get_wbio(impl_->ssl)) != 0;
+  return impl_->queued_output != 0;
 }
 
 Result<std::size_t> detail::TlsEngine::output(std::span<std::byte> buffer) noexcept
@@ -1083,21 +1102,25 @@ Result<std::size_t> detail::TlsEngine::output(std::span<std::byte> buffer) noexc
   if (impl_->error)
     return std::unexpected(impl_->error);
 
-  auto *bio = SSL_get_wbio(impl_->ssl);
-  if (BIO_ctrl_pending(bio) > impl_->credentials->limits.buffered_output) {
+  if (impl_->queued_output > impl_->credentials->limits.buffered_output) {
     impl_->error = make_error_code(TlsError::resource_limit);
     impl_->revoke_session();
     return std::unexpected(impl_->error);
   }
-  if (!BIO_ctrl_pending(bio))
+  if (!impl_->queued_output)
     return std::size_t{0};
 
-  ERR_clear_error();
+  auto *bio = SSL_get_wbio(impl_->ssl);
+  clear_io_errors();
   auto count = BIO_read(bio, buffer.data(), static_cast<int>(buffer.size()));
   if (count <= 0)
     return std::unexpected(openssl_error());
 
-  return static_cast<std::size_t>(count);
+  const auto transferred = static_cast<std::size_t>(count);
+  require(transferred <= impl_->queued_output);
+  impl_->queued_output -= transferred;
+
+  return transferred;
 }
 
 Result<bool> detail::TlsEngine::needs_input(u64 generation) const noexcept
@@ -1127,7 +1150,7 @@ Result<void> detail::TlsEngine::input(std::span<const std::byte> buffer) noexcep
       return std::unexpected(impl_->error);
     }
 
-    ERR_clear_error();
+    clear_io_errors();
     if (BIO_write(bio, buffer.data(), static_cast<int>(buffer.size())) != static_cast<int>(buffer.size()))
       return std::unexpected(openssl_error());
   }

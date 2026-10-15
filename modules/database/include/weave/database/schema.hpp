@@ -401,6 +401,12 @@ inline Operation drop_index(Name name)
   return {.kind = Operation::Kind::drop_index, .object = std::move(name)};
 }
 
+/// Drop a named index on its owning table; required by dialects with table-scoped indexes, including MySQL.
+inline Operation drop_index(Name table, std::string_view index)
+{
+  return {.kind = Operation::Kind::drop_index, .object = std::move(table), .new_name = std::string{index}};
+}
+
 } // namespace schema
 
 /// Own one trusted, vendor-specific SQL statement. Never include transaction control or change migration locks/history.

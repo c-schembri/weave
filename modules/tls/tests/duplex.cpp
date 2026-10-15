@@ -75,7 +75,9 @@ static weave::Task<void> client(weave::u16 port, const weave::TlsContext &tls, C
   co_await weave::when_all(peer.write_all(request), receive(peer, control));
 }
 
-static weave::Task<void> exchange(const weave::TlsContext &server_tls, const weave::TlsContext &client_tls)
+static weave::Task<void> backpressured_exchange(
+  const weave::TlsContext &server_tls,
+  const weave::TlsContext &client_tls)
 {
   Control control;
   auto listener = co_await weave::tcp::listen("127.0.0.1", 0);
@@ -100,7 +102,7 @@ TEST_CASE("TLS reads progress while an unrelated transport write is backpressure
     REQUIRE(server_tls);
     REQUIRE(client_tls);
 
-    auto result = ctx->run(weave::timeout(5s, exchange(*server_tls, *client_tls)));
+    auto result = ctx->run(weave::timeout(5s, backpressured_exchange(*server_tls, *client_tls)));
     const auto message = result ? std::string{} : result.error().message();
     REQUIRE_MESSAGE(result.has_value(), message);
   }

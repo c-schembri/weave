@@ -90,6 +90,8 @@ evidence of EOF.
 One reader and one writer may overlap with serialized TLS-engine access.
 Competing readers/writers and shutdown during active I/O fail operation_in_progress.
 Borrowed buffers and streams must outlive their operations.
+Each stream lazily retains a 17 KiB send buffer and a 16 KiB receive buffer;
+the directional gates protect reuse, and idle moves transfer their ownership.
 Once an operation advances TLS state, cancellation retires the engine with a sticky
 failure after native I/O drains; a pre-canceled unstarted operation does not corrupt
 an otherwise usable stream. No hidden close_notify is sent by the destructor.

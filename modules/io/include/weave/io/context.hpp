@@ -16,7 +16,7 @@ struct IoAccess;
 
 /// Backend policy for one Context; not a worker count or a thread-safety hint.
 struct ContextOptions {
-  /// On Windows, allow successful native operations to finish inline where supported.
+  /// Allow inline native completion where supported; Linux tries nonblocking sends before io_uring.
   bool skip_successful_completions = true;
 };
 

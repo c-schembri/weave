@@ -55,10 +55,12 @@
   owner's queue. Never execute an affine continuation on an arbitrary collector.
   Targeted APC wakes only interrupt alertable waits; they never resume user code.
   Do not add polling timeouts, helper threads, or shared_ptr ownership per operation.
-  Shared-port native completions may dispatch an idle movable root directly on
-  a collector in the same runtime. Keep pinned roots on their worker, serialize
+  Shared-IOCP and Linux native CQE completions may dispatch an idle movable root
+  directly on a collector in the same runtime. Keep pinned roots on their worker, serialize
   each root, bound dispatch by the existing IO batch/fairness budgets, and defer
-  submission and frame cleanup. Sharded completions remain queue-routed. Batch
+  submission and frame cleanup. Sharded IOCP completions remain queue-routed. Linux
+  command-only and immediate completions stay queued; only drained native operations
+  can dispatch directly. Clear the collector's idle flag before executing a root. Batch
   steals publish their remaining work before waking an idle thief; never hold
   two worker queue locks together or skip a busy queue lock before parking.
   Per-worker dispatch guards and shared-collector accounting must both drain
@@ -205,6 +207,22 @@
 
 ## Module boundaries
 
+- MySQL owns its classic wire protocol, capability negotiation, authentication and
+  vendor-specific type/charset/status semantics. Reuse Database storage/mapping,
+  public TCP/TLS and OpenSSL digest primitives; never depend on PostgreSQL/native
+  MySQL SDKs or force Runtime on the driver. Require verified hostname TLS by
+  default, no fallback, and never send full passwords on explicit plaintext mode.
+  Keep owned secrets best-effort cleansed. Bound logical packets/results and check
+  sequence wrap/continuations; do not claim exact heap caps from delivery budgets.
+  Serialize protocol use, retain deferred session borrows and retire/drain advanced
+  exchanges on cancellation/protocol/resource failure. Completed server ERRs permit
+  reuse. Drain every negotiated multi-result before reuse; semicolon statements require
+  explicit opt-in. LOCAL INFILE remains unsupported; never invent retries.
+  Prepared/streamed handles retain session leases before suspension. Abandoned undrained
+  streams retire the session; pool returns require all borrowers/handles drained and reset
+  before reuse. MySQL DDL requires explicit nontransactional migration policy, session-level
+  locking and durable applying/reverting history markers; never claim atomic DDL recovery.
+  Live tests use an explicitly configured private MySQL instance, never a user service.
 - Glaze is the official first-party C++ JSON library. Keep its pinned, unmodified
   JSON headers in the optional json module; do not import its networking/runtime
   facilities or make Core/TCP depend on JSON. Python tooling keeps the standard

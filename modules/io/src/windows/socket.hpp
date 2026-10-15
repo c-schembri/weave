@@ -40,7 +40,8 @@ struct SocketIoAwaiter {
   LPFN_CONNECTEX connect_fn = nullptr;
   std::array<std::byte, 2 * AddressCapacity> addresses{};
   DWORD address_bytes = sizeof(sockaddr_in) + 16;
-  CancelToken cancellation;
+  // The supplied token outlives this awaiter and its drained native callbacks.
+  const CancelToken *cancellation = nullptr;
 
   struct CancelOperation {
     HANDLE socket;
@@ -67,10 +68,15 @@ struct SocketIoAwaiter {
   template <class P>
   bool await_suspend(std::coroutine_handle<P> continuation) noexcept
   {
+    return await_suspend(std::coroutine_handle<>{continuation}, continuation.promise().cancellation);
+  }
+
+  bool await_suspend(std::coroutine_handle<> continuation, const CancelToken &token) noexcept
+  {
     detail::IoAccess::check_execution(ctx);
     auto &io = detail::IoAccess::state(ctx);
-    cancellation = continuation.promise().cancellation;
-    if (cancellation.stop_requested()) {
+    cancellation = &token;
+    if (cancellation->stop_requested()) {
       operation.error = std::make_error_code(std::errc::operation_canceled);
       return false;
     }
@@ -174,7 +180,7 @@ struct SocketIoAwaiter {
     detail::IoAccess::count(ctx, io.metrics_.submitted);
     if (!(result == 0 && skip_success)) {
       cancellation_callback.emplace(
-        cancellation.native_token(),
+        cancellation->native_token(),
         CancelOperation{reinterpret_cast<HANDLE>(socket), &operation.overlapped});
     }
     return true;
@@ -191,7 +197,7 @@ struct SocketIoAwaiter {
         operation.error = last_error();
     }
 
-    if (operation.error.value() == ERROR_OPERATION_ABORTED && (cancellation.stop_requested() || ctx.stop_requested()))
+    if (operation.error.value() == ERROR_OPERATION_ABORTED && (cancellation->stop_requested() || ctx.stop_requested()))
       operation.error = std::make_error_code(std::errc::operation_canceled);
     if (operation.error)
       return std::unexpected(operation.error);

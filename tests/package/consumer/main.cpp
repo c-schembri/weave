@@ -1,5 +1,8 @@
 #if defined(WEAVE_USE_POSTGRES)
 #include <weave/postgres.hpp>
+#elif defined(WEAVE_USE_MYSQL)
+#include <weave/mysql.hpp>
+#include <weave/io.hpp>
 #elif defined(WEAVE_USE_JSON)
 #include <weave/json.hpp>
 #elif defined(WEAVE_USE_DATABASE)
@@ -458,7 +461,14 @@ int main()
   if (weave::parse_port("8080") != 8080)
     return 5;
 
-#if defined(WEAVE_USE_POSTGRES)
+#if defined(WEAVE_USE_MYSQL)
+  auto ctx = weave::Context::create();
+  if (!ctx)
+    return 2;
+  auto invalid = ctx->run(weave::mysql::connect({}));
+  if (invalid || invalid.error() != weave::mysql::ClientError::invalid_options)
+    return 2;
+#elif defined(WEAVE_USE_POSTGRES)
   // Volatile loads retain symbol references even in optimized, network-free consumers.
   auto volatile attach = &weave::pg::Connection::attach_events;
   auto volatile blocking_attach = &weave::pg::BlockingConnection::attach_events;

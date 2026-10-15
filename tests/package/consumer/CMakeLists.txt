@@ -31,7 +31,7 @@ if(NOT "postgres" IN_LIST WEAVE_EXPECTED_MODULES AND (TARGET ICU::uc OR TARGET I
   message(FATAL_ERROR "An unrequested PostgreSQL dependency leaked into the consumer")
 endif()
 
-foreach(component IN ITEMS core json database io runtime tcp local sync tls postgres)
+foreach(component IN ITEMS core json database io runtime tcp local sync tls postgres mysql)
   if(component IN_LIST WEAVE_EXPECTED_MODULES)
     if(NOT TARGET weave::${component})
       message(FATAL_ERROR "Missing transitive target weave::${component}")

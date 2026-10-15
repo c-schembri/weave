@@ -306,7 +306,7 @@ public:
       return std::unexpected(invalid());
     const bool replacement = kind == schema::Operation::Kind::rename_table ||
       kind == schema::Operation::Kind::drop_column || kind == schema::Operation::Kind::rename_column ||
-      kind == schema::Operation::Kind::create_index;
+      kind == schema::Operation::Kind::create_index || kind == schema::Operation::Kind::drop_index;
     if (!replacement && !operation.new_name.empty())
       return std::unexpected(invalid());
 
@@ -367,7 +367,8 @@ public:
       result += identifier(operation.new_name) + " ON " + object + " (" + identifiers(operation.index_columns) + ")";
       break;
     case schema::Operation::Kind::drop_index:
-      result = "DROP INDEX " + object;
+      result = "DROP INDEX " +
+        (operation.new_name.empty() ? object : qualified(schema::qualified(space, operation.new_name)));
       break;
     default:
       error_ = db::make_error_code(MigrationError::unsupported);

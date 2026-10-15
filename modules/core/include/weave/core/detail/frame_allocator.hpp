@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <new>
+#include <type_traits>
 
 #if defined(__has_feature)
 #if __has_feature(address_sanitizer)
@@ -60,7 +61,7 @@ inline void frame_heap_free(void *memory, std::size_t alignment) noexcept
 }
 
 // Only dead frames enter the cache. No frame points back to its allocating thread.
-class FrameCache {
+class FrameCacheStorage {
   struct Node {
     Node *next;
   };
@@ -70,7 +71,7 @@ class FrameCache {
     std::size_t count = 0;
   };
 
-  std::array<Bucket, 4> buckets_{};
+  std::array<Bucket, 5> buckets_{};
 
   static std::size_t index(std::size_t size) noexcept
   {
@@ -98,7 +99,7 @@ class FrameCache {
   }
 
 public:
-  static constexpr std::size_t max_size = 1024;
+  static constexpr std::size_t max_size = 2048;
   static constexpr std::size_t bucket_limit = 64;
 
   static std::size_t allocation_size(std::size_t size, std::size_t alignment) noexcept
@@ -107,14 +108,9 @@ public:
     return cacheable ? std::size_t{128} << index(size) : size;
   }
 
-  FrameCache() = default;
-  FrameCache(const FrameCache &) = delete;
-  FrameCache &operator=(const FrameCache &) = delete;
-
-  ~FrameCache()
-  {
-    clear();
-  }
+  FrameCacheStorage() = default;
+  FrameCacheStorage(const FrameCacheStorage &) = delete;
+  FrameCacheStorage &operator=(const FrameCacheStorage &) = delete;
 
   void *allocate(std::size_t size, std::size_t alignment = __STDCPP_DEFAULT_NEW_ALIGNMENT__)
   {
@@ -186,16 +182,34 @@ public:
   }
 };
 
-inline constinit thread_local bool frame_cache_stopped = false;
+static_assert(std::is_trivially_destructible_v<FrameCacheStorage>);
 
-struct ThreadFrameCache : FrameCache {
-  ~ThreadFrameCache()
+class FrameCache : public FrameCacheStorage {
+public:
+  ~FrameCache()
   {
-    frame_cache_stopped = true;
+    clear();
   }
 };
 
-inline thread_local ThreadFrameCache frame_cache;
+inline constinit thread_local FrameCacheStorage frame_cache;
+inline constinit thread_local bool frame_cache_stopped = false;
+inline constinit thread_local bool frame_cache_registered = false;
+
+struct ThreadFrameCacheCleanup {
+  ~ThreadFrameCacheCleanup()
+  {
+    frame_cache_stopped = true;
+    frame_cache.clear();
+  }
+};
+
+inline void register_frame_cache()
+{
+  static thread_local ThreadFrameCacheCleanup cleanup;
+  (void)cleanup;
+  frame_cache_registered = true;
+}
 
 inline void *allocate_frame(std::size_t size, std::size_t alignment)
 {
@@ -205,8 +219,11 @@ inline void *allocate_frame(std::size_t size, std::size_t alignment)
 #endif
 #if WEAVE_RECYCLE_FRAMES
   // Other TLS destructors may still create/destroy coroutines after cache teardown.
-  if (!frame_cache_stopped)
+  if (!frame_cache_stopped) {
+    if (!frame_cache_registered)
+      register_frame_cache();
     return frame_cache.allocate(size, alignment);
+  }
 
   // A frame created during TLS teardown may later be freed on another thread.
   size = FrameCache::allocation_size(size, alignment);
@@ -218,6 +235,8 @@ inline void deallocate_frame(void *memory, std::size_t size, std::size_t alignme
 {
 #if WEAVE_RECYCLE_FRAMES
   if (!frame_cache_stopped) {
+    if (!frame_cache_registered)
+      register_frame_cache();
     frame_cache.deallocate(memory, size, alignment);
     return;
   }

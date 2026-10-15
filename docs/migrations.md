@@ -162,5 +162,22 @@ their driver categories; history/validation errors use `MigrationError`.
 
 The [complete example](../modules/postgres/examples/migrations/main.cpp) has
 [three separate migration files](../modules/postgres/examples/migrations/changes).
-Only asynchronous PostgreSQL execution is implemented; other driver adapters and
-blocking migration execution are not claimed.
+MySQL supports async and blocking execution through `<weave/mysql/migrations.hpp>`;
+its [example](../modules/mysql/examples/migrations/main.cpp) uses the same file generator.
+Set `.transaction = db::MigrationTransaction::none` in **every** entry. DDL implicitly
+commits; requesting atomic schema/history execution fails before changes. The adapter
+uses GET_LOCK, qualified InnoDB history and durable applying/reverting markers.
+Autocommit must stay enabled with no active transaction. Lock deadlines accept zero
+through 24 hours; unlock cleanup is shielded and bounded. Server identifier folding
+is respected for lock/history identity and reserved-history protection.
+
+Portable types map to SMALLINT/INT/BIGINT, FLOAT/DOUBLE, checked BOOLEAN, LONGTEXT/
+LONGBLOB, DATE/DATETIME(6), VARCHAR and DECIMAL. Identity needs an indexed key.
+Conservative limits: identifiers 64 UTF-8 bytes in the Unicode BMP (no trailing spaces), VARCHAR 16,383 characters, decimal
+precision 65 and scale 30. Invalid/unsupported descriptions fail, not truncate.
+Use `schema::drop_index(table, index)`, not the PostgreSQL index-only form. Vendor
+SQL selects `db::Vendor::mysql`; transaction/lock/history manipulation stays forbidden.
+Dirty history blocks migration/status until an operator reconciles actual schema
+and repairs history under the same lock. Other vendors are not implemented.
+Dialect preflight checks descriptions, not every server SQL-mode/value/engine limit;
+native rejection can still occur after a nontransactional marker is written.

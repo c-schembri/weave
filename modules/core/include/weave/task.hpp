@@ -30,12 +30,30 @@ class Task;
 
 namespace detail {
 
+#if !defined(_MSC_VER)
+[[noreturn]]
+#if defined(__GNUC__) || defined(__clang__)
+[[gnu::cold, gnu::noinline]]
+#endif
+inline void contract_failed(std::source_location location) noexcept
+{
+  std::fprintf(stderr, "Weave contract: %s:%u\n", location.file_name(), location.line());
+  std::abort();
+}
+#endif
+
 inline void require(bool condition, std::source_location location = std::source_location::current()) noexcept
 {
+#if defined(_MSC_VER)
+  // Outlining this failure path increases measured MSVC coroutine-frame sizes.
   if (!condition) {
     std::fprintf(stderr, "Weave contract: %s:%u\n", location.file_name(), location.line());
     std::abort();
   }
+#else
+  if (!condition)
+    contract_failed(location);
+#endif
 }
 
 template <class F>
@@ -51,6 +69,9 @@ enum class State {
   succeeded,
   failed
 };
+
+// Observe the current promise token synchronously; do not carry the reference across another await.
+struct GetCancellationReference {};
 
 struct PromiseBase {
   std::coroutine_handle<> self;
@@ -152,7 +173,8 @@ struct FailureAwaiter {
 };
 
 struct CancellationAwaiter {
-  CancelToken token;
+  // This ready check cannot outlive its promise; it does not need another token owner.
+  const CancelToken &token;
 
   bool await_ready() const noexcept
   {
@@ -266,7 +288,7 @@ struct Promise : Return<T> {
   }
 
   struct TokenAwaiter {
-    CancelToken token;
+    const CancelToken &token;
 
     bool await_ready() const noexcept
     {
@@ -286,6 +308,18 @@ struct Promise : Return<T> {
   auto await_transform(GetCancellation) noexcept
   {
     return TokenAwaiter{this->cancellation};
+  }
+
+  struct TokenReferenceAwaiter : TokenAwaiter {
+    const CancelToken &await_resume() const noexcept
+    {
+      return this->token;
+    }
+  };
+
+  auto await_transform(GetCancellationReference) noexcept
+  {
+    return TokenReferenceAwaiter{TokenAwaiter{this->cancellation}};
   }
 
   template <class U>

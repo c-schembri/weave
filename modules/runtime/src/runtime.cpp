@@ -104,17 +104,22 @@ struct Runtime::Impl {
     auto &worker = *workers[index];
     detail::trace(detail::TraceEvent::enqueue, &task, index);
 
+    std::size_t queued;
     {
       std::lock_guard lock(worker.queue_mutex);
       (pinned ? worker.pinned : worker.movable).push_back(task);
+      queued = worker.pinned.size + worker.movable.size;
     }
 
     // Marking idle before rechecking queues closes the enqueue/park lost-wake race.
     const bool waking_owner = worker.idle.exchange(false, std::memory_order_acq_rel);
-    if (waking_owner)
+    const bool on_owner = current_scheduler == this && current_worker == index;
+    if (waking_owner && !on_owner)
       detail::ContextAccess::wake(*worker.context);
 
-    if (!pinned && !waking_owner)
+    // A collector can immediately run its only ready root; do not migrate it just to wake a thief.
+    // Running roots, local backlogs and foreign producers still expose work to idle workers.
+    if (!pinned && !waking_owner && (!on_owner || current_task || queued > 1))
       wake_thief(index);
   }
 
@@ -345,7 +350,7 @@ struct Runtime::Impl {
       }
 
       // Bound ready-work batches so sockets are serviced under sustained CPU load.
-      if (dispatched) {
+      if (dispatched == 64) {
         detail::ContextAccess::poll(*ctx, false);
         continue;
       }
@@ -510,8 +515,12 @@ void detail::dispatch_completion(Posted &message) noexcept
 {
   auto &task = *static_cast<RuntimeTask *>(message.executor);
   auto *runtime = static_cast<Runtime *>(task.owner);
-  const bool shared = runtime->impl_->io_layout == IoLayout::shared;
-  if (shared && current_scheduler == runtime->impl_.get() && !current_task && !current_executor) {
+#if defined(__linux__)
+  constexpr bool direct = true;
+#else
+  const bool direct = runtime->impl_->io_layout == IoLayout::shared;
+#endif
+  if (direct && current_scheduler == runtime->impl_.get() && !current_task && !current_executor) {
     std::unique_lock lock(task.ready_mutex);
     if (!task.scheduled && (!task.pinned || task.worker == current_worker)) {
       // Only native completions take this path. Submission and frame cleanup stay deferred.
@@ -521,6 +530,7 @@ void detail::dispatch_completion(Posted &message) noexcept
       task.first = task.last = &message;
       lock.unlock();
       trace(TraceEvent::local_completion, &task, current_worker);
+      runtime->impl_->workers[current_worker]->idle.store(false, std::memory_order_release);
       runtime->impl_->execute(task, current_worker);
       return;
     }

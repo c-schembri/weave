@@ -36,11 +36,11 @@
     },
     {
       "name": "windows-postgres",
-      "displayName": "Windows correctness tests including TLS and native PostgreSQL",
+      "displayName": "Windows correctness tests including TLS, PostgreSQL and MySQL",
       "inherits": "windows-tls",
       "binaryDir": "${sourceDir}/build/windows-postgres",
       "cacheVariables": {
-        "WEAVE_MODULES": "core;io;runtime;tcp;local;sync;tls;postgres",
+        "WEAVE_MODULES": "core;io;runtime;tcp;local;sync;tls;postgres;mysql",
         "WEAVE_POSTGRES_BENCHMARKS": "OFF"
       }
     },

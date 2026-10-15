@@ -56,6 +56,7 @@ struct Operation {
   bool cancelled = false;
   bool cancel_pending = false;
   bool native_done = false;
+  bool socket_nonempty = false;
 };
 
 } // namespace detail
@@ -64,6 +65,7 @@ struct Context::Impl {
   struct Completion {
     u64 key;
     int result;
+    bool socket_nonempty;
   };
 
   io_uring ring_{};

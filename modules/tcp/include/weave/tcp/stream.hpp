@@ -12,6 +12,12 @@ namespace weave {
 class TcpStream;
 class TcpListener;
 
+namespace detail {
+
+class TcpReadOperation;
+
+} // namespace detail
+
 /// Native keepalive policy. Zero tuning values preserve existing OS settings.
 struct TcpKeepAliveOptions {
   bool enabled = true;
@@ -86,6 +92,7 @@ public:
 private:
   friend Task<TcpStream> tcp::connect(Context &, Endpoint);
   friend class TcpListener;
+  friend class detail::TcpReadOperation;
 
   TcpStream(Context &ctx, std::uintptr_t socket, bool skip_success) noexcept
       : ctx_(&ctx), socket_(socket), skip_success_(skip_success)
@@ -97,6 +104,7 @@ private:
   bool reading_ = false;
   bool writing_ = false;
   bool skip_success_ = false;
+  bool receive_nonempty_ = true;
 };
 
 } // namespace weave

@@ -27,20 +27,21 @@ force a full HTTP stack on every consumer.
 
 ```text
 core <- io <- runtime
-          <- tcp <- tls <- postgres
+          <- tcp <- tls <- {postgres, mysql}
           <- local       <- postgres (private transport)
           <- sync <- tls
-core <- database <- postgres
+core <- database <- {postgres, mysql}
 ```
 
-PostgreSQL uses public transports, not IOCP/io_uring or scheduler internals.
-Its private protocol parsers, OpenSSL Crypto and ICU do not become public native
-types. libpq exists only in optional comparison targets. [Build components](build.md).
+PostgreSQL and MySQL use public transports, not IOCP/io_uring or scheduler internals.
+Their private protocol parsers and authentication dependencies do not become public
+native types. libpq/libmysqlclient exist only in optional comparison targets.
+[Build components](build.md).
 
 ### Database Foundation
 
-The foundation separates reusable database machinery from PostgreSQL, preserving
-its public API. MySQL is the next implementation; SQLite, Oracle and
+The foundation separates reusable database machinery from PostgreSQL and MySQL,
+preserving their vendor-specific APIs. SQLite, Oracle and
 SQL Server are design constraints, not implemented drivers or a new feature backlog.
 
 - **`weave::database`:** Core-only arena/container storage, column lookup, fixed-array
@@ -80,8 +81,8 @@ Async admission is not an installed header or a selectable package component.
 
 ## Visibility
 
-Public concepts live under `weave`, with feature APIs such as `tcp`, `tls` and
-`pg`. Shared internal contracts belong in the owning `detail` namespace.
+Public concepts live under `weave`, with feature APIs such as `tcp`, `tls`, `pg`
+and `mysql`. Shared internal contracts belong in the owning `detail` namespace.
 File/platform-local helpers belong in an anonymous namespace inside the library
 namespace, before public/member definitions. Private does not automatically mean
 shared `detail`.
@@ -112,7 +113,7 @@ at explicit boundaries. Joined children drain before enclosing frames are freed.
 This is a cooperating coroutine model, not automatic error handling for arbitrary
 C++ awaiters. [Public execution and lifetime contracts](execution.md).
 
-## PostgreSQL Pooling
+## Database Pooling
 
 A pool owns immutable reconnect configuration, a bounded semaphore and stable
 session entries. Acquisitions/leases retain shared pool state, not a pointer to
@@ -123,12 +124,12 @@ Connection objects are not shared concurrently between borrowers. A pool belongs
 to its creating Context or compatible work-stealing domain; affine workers use
 separate pools. Closing wakes acquisition waiters and retires idle sessions;
 existing leases drain independently and discard on return.
-[Public pooling API](postgres.md#pooling).
+[PostgreSQL pooling](postgres.md#pooling) / [MySQL pooling and reset](mysql.md#blocking-and-pooling).
 
 ## Scope
 
 Implemented: core Tasks, IO, runtime, TCP, local sockets, synchronization, TLS and
-native PostgreSQL. HTTP, WebSocket, portable asynchronous files, general blocking
+native PostgreSQL/MySQL. HTTP, WebSocket, portable asynchronous files, general blocking
 work offload and a macOS backend are not implemented. Linux shared I/O and Linux
-correctness CI remain separate work. TLS/PostgreSQL are experimental, not certified
+correctness CI remain separate work. TLS and database clients are experimental, not certified
 production-ready. [Qualification and deployment limits](testing.md).

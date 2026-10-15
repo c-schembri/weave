@@ -28,12 +28,17 @@ struct ResultHeap {
 
   static void *reserve(void *, std::size_t size, std::size_t alignment) noexcept
   {
+    if (alignment <= __STDCPP_DEFAULT_NEW_ALIGNMENT__)
+      return ::operator new(size, std::nothrow);
     return ::operator new(size, std::align_val_t{alignment}, std::nothrow);
   }
 
   static void release(void *, void *data, std::size_t, std::size_t alignment) noexcept
   {
-    ::operator delete(data, std::align_val_t{alignment});
+    if (alignment <= __STDCPP_DEFAULT_NEW_ALIGNMENT__)
+      ::operator delete(data);
+    else
+      ::operator delete(data, std::align_val_t{alignment});
   }
 
   static ResultHeap standard() noexcept
@@ -51,6 +56,7 @@ class ResultStorage {
     std::size_t size = 0;
     std::size_t alignment = 0;
     bool active = true;
+    bool embedded = false;
   };
 
   ResultHeap heap_;
@@ -63,25 +69,54 @@ class ResultStorage {
   {
   }
 
-  ~ResultStorage()
+  static std::size_t aligned_size(std::size_t size, std::size_t alignment) noexcept
   {
-    while (blocks_) {
-      auto *block = std::exchange(blocks_, blocks_->next);
-      require(!block->active);
-      const auto size = block->size;
-      const auto alignment = block->alignment;
-      std::destroy_at(block);
-      heap_.deallocate(heap_.state, block, size, alignment);
-    }
+    require(size <= std::numeric_limits<std::size_t>::max() - (alignment - 1));
+    return (size + alignment - 1) & ~(alignment - 1);
   }
 
+  ~ResultStorage() = default;
+
 public:
+  struct Allocation {
+    ResultStorage *storage;
+    void *data;
+  };
+
   static ResultStorage *create(ResultHeap heap)
   {
     require(heap.allocate != nullptr && heap.deallocate != nullptr);
     auto *memory = heap.allocate(heap.state, sizeof(ResultStorage), alignof(ResultStorage));
     require(memory != nullptr);
     return ::new (memory) ResultStorage(heap);
+  }
+
+  static Allocation allocate_first(ResultHeap heap, std::size_t size, std::size_t alignment)
+  {
+    require(heap.allocate != nullptr && heap.deallocate != nullptr);
+    require(alignment && (alignment & (alignment - 1)) == 0);
+    alignment = std::max({alignment, alignof(ResultStorage), alignof(Block)});
+    const auto control = aligned_size(sizeof(ResultStorage), alignment);
+    const auto prefix = aligned_size(sizeof(Block) + sizeof(Block *), alignment);
+    const auto maximum = std::numeric_limits<std::size_t>::max();
+    require(prefix <= maximum - control && size <= maximum - control - prefix);
+    const auto requested = control + prefix + size;
+
+    auto *memory = heap.allocate(heap.state, requested, alignment);
+    require(memory != nullptr);
+    auto *storage = ::new (memory) ResultStorage(heap);
+    auto *block = ::new (static_cast<std::byte *>(memory) + control) Block;
+    block->owner = storage;
+    block->size = requested;
+    block->alignment = alignment;
+    block->embedded = true;
+    storage->blocks_ = block;
+    storage->references_.store(2, std::memory_order_relaxed);
+    storage->bytes_.store(requested, std::memory_order_relaxed);
+
+    auto *data = static_cast<std::byte *>(memory) + control + prefix;
+    std::memcpy(data - sizeof(Block *), &block, sizeof(block));
+    return {storage, data};
   }
 
   void retain() noexcept
@@ -98,8 +133,24 @@ public:
       return;
 
     const auto heap = heap_;
+    auto size = sizeof(ResultStorage);
+    auto alignment = alignof(ResultStorage);
+    while (blocks_) {
+      auto *block = std::exchange(blocks_, blocks_->next);
+      require(!block->active);
+      const auto block_size = block->size;
+      const auto block_alignment = block->alignment;
+      const auto embedded = block->embedded;
+      std::destroy_at(block);
+      if (embedded) {
+        size = block_size;
+        alignment = block_alignment;
+      } else {
+        heap.deallocate(heap.state, block, block_size, block_alignment);
+      }
+    }
     this->~ResultStorage();
-    heap.deallocate(heap.state, this, sizeof(ResultStorage), alignof(ResultStorage));
+    heap.deallocate(heap.state, this, size, alignment);
   }
 
   std::size_t bytes() const noexcept
@@ -117,9 +168,7 @@ public:
     require(alignment && (alignment & (alignment - 1)) == 0);
     alignment = std::max(alignment, alignof(Block));
     const auto maximum = std::numeric_limits<std::size_t>::max();
-    require(alignment - 1 <= maximum - sizeof(Block) - sizeof(Block *));
-    const auto overhead = sizeof(Block) + sizeof(Block *) + alignment - 1;
-    const auto prefix = overhead & ~(alignment - 1);
+    const auto prefix = aligned_size(sizeof(Block) + sizeof(Block *), alignment);
     require(size <= maximum - prefix);
     const auto requested = prefix + size;
 
@@ -224,13 +273,24 @@ public:
 
   ResultArena fresh() const
   {
-    return storage_ ? create(storage_->heap()) : ResultArena{};
+    if (!storage_)
+      return {};
+
+    const auto heap = storage_->heap();
+    const bool standard = heap.state == nullptr && heap.allocate == ResultHeap::reserve &&
+      heap.deallocate == ResultHeap::release;
+    // Standard copies stay lazy through SSO; custom providers keep their captured policy.
+    return standard ? ResultArena{} : create(heap);
   }
 
   void *allocate(std::size_t size, std::size_t alignment)
   {
-    if (!storage_)
-      *this = create();
+    if (!storage_) {
+      // Establish the lazy arena and its first block in one exact-sized heap allocation.
+      auto allocation = ResultStorage::allocate_first(ResultHeap::standard(), size, alignment);
+      storage_ = allocation.storage;
+      return allocation.data;
+    }
     return storage_->allocate(size, alignment);
   }
 };

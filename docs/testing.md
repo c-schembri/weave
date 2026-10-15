@@ -1,7 +1,7 @@
 # Testing And Deployment Boundaries
 
 Correctness and performance are separate. Windows CI runs Debug, Release and
-AddressSanitizer with TLS/PostgreSQL enabled, without benchmark execution or
+AddressSanitizer with TLS/PostgreSQL/MySQL enabled, without benchmark execution or
 Tokio/libpq benchmark dependencies. Artifacts retain JUnit and failed-test logs.
 Sanitizers instrument first-party code, not every external provider.
 JSON checks cover Glaze struct mapping, strict document consumption, diagnostics
@@ -30,6 +30,12 @@ timer races, bounded synchronization, module packaging/standalone installed head
 TCP/local endpoints and fragmentation/refusal/reset/half-close. Runtime controls
 exercise both schedulers and four workers; Windows also covers both IOCP layouts.
 Linux tests use actual io_uring, not an emulation or inherited Windows result.
+
+GCC 15.2's Release ASan build does not tail-transfer the 20,000-level coroutine
+construction test: it exhausts an 8 MiB stack, while the same test passes with
+`ulimit -s 65536`. Linux sanitizer qualification currently uses that larger stack.
+This verifies lifetime cleanup, not bounded-stack construction in that instrumented
+build; retain the 8 MiB failure rather than claiming a clean sanitizer gate there.
 
 ## TLS And PostgreSQL
 

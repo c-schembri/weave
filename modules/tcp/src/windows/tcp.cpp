@@ -1,5 +1,6 @@
 #include <winsock2.h>
 #include <weave/tcp.hpp>
+#include <weave/tcp/detail/read.hpp>
 #include "windows/iocp.hpp"
 #include "windows/address.hpp"
 #include "windows/socket.hpp"
@@ -10,6 +11,7 @@
 #include <ws2tcpip.h>
 #include <algorithm>
 #include <mutex>
+#include <new>
 #include <type_traits>
 #if defined(WEAVE_PROFILE_RUNTIME)
 #include <chrono>
@@ -93,6 +95,16 @@ struct TcpOperationFlag {
 };
 
 using TcpIoAwaiter = detail::SocketIoAwaiter<>;
+
+struct TcpReadState {
+  TcpOperationFlag guard;
+  detail::SocketIoAwaiter<0> operation;
+
+  TcpReadState(bool &reading, Context &context, SOCKET socket, bool skip_success) noexcept
+      : guard(reading), operation(detail::SocketIoAwaiter<0>::receive, context, socket, skip_success)
+  {
+  }
+};
 
 Result<SOCKET> make_socket(Context &context, bool &skip_success, int family)
 {
@@ -485,23 +497,61 @@ Result<void> TcpStream::cancel()
   return {};
 }
 
+detail::TcpReadOperation::TcpReadOperation(TcpStream &stream, std::span<std::byte> buffer, Cancellation policy) noexcept
+    : stream_(stream), buffer_(buffer), policy_(policy)
+{
+}
+
+detail::TcpReadOperation::~TcpReadOperation()
+{
+  detail::require(!initialized_ || resumed_);
+  if (initialized_)
+    std::launder(reinterpret_cast<TcpReadState *>(storage_.data()))->~TcpReadState();
+}
+
+bool detail::TcpReadOperation::start(std::coroutine_handle<> continuation, const CancelToken &token) noexcept
+{
+  static_assert(sizeof(TcpReadState) <= sizeof(storage_));
+  static_assert(alignof(TcpReadState) <= alignof(void *));
+  detail::require(started_ && !initialized_ && !resumed_);
+
+  if (policy_ == Cancellation::snapshot && token.stop_requested()) {
+    result_ = std::unexpected(std::make_error_code(std::errc::operation_canceled));
+    return false;
+  }
+
+  detail::IoAccess::check_execution(*stream_.ctx_);
+  if (stream_.reading_) {
+    result_ = std::unexpected(busy());
+    return false;
+  }
+  if (stream_.socket_ == INVALID_SOCKET) {
+    result_ = std::unexpected(win_error(WSAENOTSOCK));
+    return false;
+  }
+  if (buffer_.empty())
+    return false;
+
+  auto *state = new (storage_.data())
+    TcpReadState(stream_.reading_, *stream_.ctx_, stream_.socket_, stream_.skip_success_);
+  initialized_ = true;
+  state->operation.buffer.buf = reinterpret_cast<char *>(buffer_.data());
+  state->operation.buffer.len = static_cast<ULONG>((std::min)(buffer_.size(), std::size_t{65536}));
+  return state->operation.await_suspend(continuation, token);
+}
+
+Result<std::size_t> detail::TcpReadOperation::await_resume() noexcept
+{
+  detail::require(started_ && !resumed_);
+  if (initialized_)
+    result_ = std::launder(reinterpret_cast<TcpReadState *>(storage_.data()))->operation.await_resume();
+  resumed_ = true;
+  return result_;
+}
+
 Task<std::size_t> TcpStream::read(std::span<std::byte> buffer)
 {
-  detail::IoAccess::check_execution(*ctx_);
-  if (reading_)
-    co_return std::unexpected(busy());
-
-  if (socket_ == INVALID_SOCKET)
-    co_return std::unexpected(win_error(WSAENOTSOCK));
-
-  if (buffer.empty())
-    co_return std::size_t{0};
-
-  TcpOperationFlag guard(reading_);
-  TcpIoAwaiter operation(TcpIoAwaiter::receive, *ctx_, socket_, skip_success_);
-  operation.buffer.buf = reinterpret_cast<char *>(buffer.data());
-  operation.buffer.len = static_cast<ULONG>((std::min)(buffer.size(), std::size_t{65536}));
-
+  detail::TcpReadOperation operation(*this, buffer, detail::TcpReadOperation::Cancellation::borrow);
   auto result = co_await operation;
   if (!result)
     co_await fail(result.error());

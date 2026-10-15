@@ -241,6 +241,7 @@ recovery_modes = ['recover_ready', 'recover_reject', 'recover_refused', 'recover
                   'random_ready', 'timeout_ready', 'protocol_ready', 'resource_ready',
                   'secure_failure_ready', 'ssl_refusal_ready']
 modes += recovery_modes
+cancellation_modes = ['cancel', 'pre_cancel', 'cancel_recovery']
 engines = [] if args.native else ['context', 'blocking']
 if args.runtime and not args.native:
     engines += ['affine', 'stealing']
@@ -264,6 +265,7 @@ def read_paths():
 reader = threading.Thread(target=read_paths)
 reader.start()
 certificates = []
+executed = 0
 try:
     certificates = [paths.get(timeout=30) for _ in range(7)]
     assert all(certificates)
@@ -282,9 +284,13 @@ try:
             if args.mode and args.mode != mode:
                 continue
             control(args.executable, args.libpq_version, mode, engine, certificates)
-        if engine != 'blocking' and not args.mode:
-            for mode in ['cancel', 'pre_cancel', 'cancel_recovery']:
+            executed += 1
+        if engine != 'blocking':
+            for mode in cancellation_modes:
+                if args.mode and args.mode != mode:
+                    continue
                 control(args.executable, args.libpq_version, mode, engine, certificates)
+                executed += 1
     selected_native = native_modes if args.native else []
     for mode in selected_native:
         if args.engine and args.engine != 'native':
@@ -292,6 +298,9 @@ try:
         if args.mode and args.mode != mode:
             continue
         control(args.executable, args.libpq_version, mode, 'native', certificates)
+        executed += 1
+    if not executed:
+        raise RuntimeError('no availability cases matched the selected mode/engine')
 finally:
     try:
         stdout, stderr = fixture.communicate('\n', timeout=10)

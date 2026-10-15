@@ -246,7 +246,7 @@ static weave::Task<void> schema_operations(pg::Options options)
       schema::create_index("migration_type_index", "migration_types", "tenant", "id").unique(),
       schema::rename_column("migration_types", "created", "created_at"),
       schema::rename_table("migration_types", "migration_types_done"),
-      schema::drop_index("migration_type_index"),
+      schema::drop_index("migration_types_done", "migration_type_index"),
       schema::drop_column("migration_types_done", "data"))
       .rollback(schema::drop_table("migration_children"), schema::drop_table("migration_types_done")));
   co_await db::migrate(connection, manifest, {.history_table = "migration_types_history"});

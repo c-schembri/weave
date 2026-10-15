@@ -14,7 +14,8 @@
     "${workspaceFolder}/modules/local/include",
     "${workspaceFolder}/modules/sync/include",
     "${workspaceFolder}/modules/tls/include",
-    "${workspaceFolder}/modules/postgres/include"
+    "${workspaceFolder}/modules/postgres/include",
+    "${workspaceFolder}/modules/mysql/include"
   ],
   "C_Cpp.default.mergeConfigurations": true,
   "C_Cpp.formatting": "clangFormat",
