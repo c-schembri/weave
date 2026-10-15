@@ -11,8 +11,11 @@ Start with the [project README](../README.md), then open the guide for the featu
 | [Networking](../modules/tcp/README.md) | TCP, addresses, DNS, local sockets and stream helpers |
 | [Synchronization](../modules/sync/README.md) | Bounded channels and semaphores |
 | [TLS](../modules/tls/README.md) | Verified connections, mTLS, sessions, revocation and credential policy |
-| [PostgreSQL](../modules/postgres/README.md) | Queries, results, streaming, COPY, pooling and blocking use |
-| [MySQL](../modules/mysql/README.md) | Prepared/text queries, streaming, pooling, blocking use and migrations |
+| [PostgreSQL](../modules/postgres/README.md) | Connect, execute and map rows into structs |
+| [MySQL](../modules/mysql/README.md) | Connect, execute and map rows into structs |
+| [PostgreSQL usage](../modules/postgres/docs/usage.md) | Parameters, primitive values, pooling, streaming, COPY and lifetime contracts |
+| [MySQL usage](../modules/mysql/docs/usage.md) | Prepared statements, primitive values, streaming, pooling and security contracts |
+| [Database driver adapters](../modules/database/examples/adapters/README.md) | In-memory column and struct-mapping examples for driver authors |
 | [Migrations](../modules/database/docs/migrations.md) | Schema DSL, per-file CMake registration, execution and recovery |
 | [PostgreSQL connections](../modules/postgres/docs/connections.md) | Configuration, authentication, TLS modes, failover and cancellation |
 | [PostgreSQL advanced](../modules/postgres/docs/advanced.md) | Pipelines, portals, mixed exchanges, replication and large objects |
@@ -26,12 +29,8 @@ Start with the [project README](../README.md), then open the guide for the featu
 
 Examples: [TCP echo](../modules/tcp/examples/echo/README.md),
 [TLS echo](../modules/tls/examples/echo/README.md),
-[database columns](../modules/database/examples/columns.cpp),
-[database mapping](../modules/database/examples/mapping.cpp),
-[PostgreSQL simple struct](../modules/postgres/examples/queries/simple_struct.cpp),
-[PostgreSQL column aliases](../modules/postgres/examples/queries/shared_mapping.cpp),
-[PostgreSQL pooling](../modules/postgres/examples/connections/pool.cpp),
-[MySQL usage](../modules/mysql/examples/README.md).
+[PostgreSQL](../modules/postgres/examples/README.md),
+[MySQL](../modules/mysql/examples/README.md).
 
 Implementation diaries and superseded qualification notes remain in Git history,
 not in the user guide. Current guides describe supported contracts; tests are not

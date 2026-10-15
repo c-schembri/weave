@@ -7,7 +7,7 @@ struct Item {
   int id;
 };
 
-// A minimal in-memory adapter; actual drivers provide their own field codecs.
+// Driver-adapter demonstration; application queries use the driver's row.as<T>().
 struct Field {
   int value;
   bool found;

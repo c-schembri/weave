@@ -3,6 +3,10 @@
 Each source is a complete program; link `weave::mysql`. No native MySQL client SDK
 or Runtime is required. Queries use constants, so no application tables are needed.
 
+Start with [query.cpp](query.cpp): connect, execute, map each row with
+`row.as<Shipment>()`, then shut down. It uses the same struct and SQL as the
+[PostgreSQL query example](../../postgres/examples/queries/simple_struct.cpp).
+
 | Source / Target | Shows |
 | --- | --- |
 | [query.cpp](query.cpp) / `mysql_query` | Automatic struct mapping, without registration |
@@ -37,4 +41,4 @@ The migration example additionally requires a `shipping` database and creates it
 No example disables TLS verification. For mTLS add `certificate_file` and
 `private_key_file` to the client TLS policy. Keep borrowed arrays/views alive until
 their Tasks and cancellation cleanup finish; statement/stream handles lease their
-connection. [API, security and lifetime contracts](../README.md).
+connection. [Detailed APIs, security and lifetime contracts](../docs/usage.md).

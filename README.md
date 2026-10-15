@@ -66,9 +66,9 @@ Each module exports `weave::<name>`. Installed packages also support
 | --- | --- |
 | TCP server | [Concurrent echo servers](modules/tcp/examples/echo/README.md) |
 | TLS server | [TLS echo](modules/tls/examples/echo/README.md) |
-| PostgreSQL | [Struct queries](modules/postgres/examples/queries/simple_struct.cpp), [pooling](modules/postgres/examples/connections/pool.cpp) |
-| MySQL | [Queries, streaming, pools and migrations](modules/mysql/examples/README.md) |
-| Data conversion | [JSON structs](modules/json/examples/struct.cpp), [database mapping](modules/database/examples/mapping.cpp) |
+| PostgreSQL | [Struct queries](modules/postgres/examples/queries/simple_struct.cpp), [more examples](modules/postgres/examples/README.md) |
+| MySQL | [Struct queries](modules/mysql/examples/query.cpp), [more examples](modules/mysql/examples/README.md) |
+| Data conversion | [JSON structs](modules/json/examples/struct.cpp) |
 
 ## Repository Map
 

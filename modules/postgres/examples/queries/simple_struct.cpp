@@ -1,6 +1,5 @@
 #include <weave/postgres.hpp>
 #include <weave/log.hpp>
-#include <cstdio>
 #include <cstdlib>
 #include <string>
 #include <utility>
@@ -13,14 +12,14 @@ struct Shipment {
 static weave::Task<void> example(weave::pg::Options options)
 {
   auto db = co_await weave::pg::connect(std::move(options));
-  auto result = co_await db.execute_borrowed("SELECT 42::bigint AS id, 'Ada'::text AS recipient");
+  auto result = co_await db.execute("SELECT 42 AS id, 'Ada' AS recipient");
 
   for (const auto &row : result.rows) {
     auto shipment = row.as<Shipment>();
     if (!shipment)
       co_await weave::fail(shipment.error());
 
-    std::printf("Shipment %lld for %s\n", static_cast<long long>(shipment->id), shipment->recipient.c_str());
+    WEAVE_LOG_INFO("Shipment %lld for %s", static_cast<long long>(shipment->id), shipment->recipient.c_str());
   }
 
   co_await db.finish();

@@ -1,5 +1,5 @@
 foreach(example IN ITEMS columns mapping)
-  add_executable(database_${example} ${example}.cpp)
+  add_executable(database_${example} adapters/${example}.cpp)
   target_link_libraries(database_${example} PRIVATE weave::database)
   weave_no_exceptions(database_${example})
   set_target_properties(database_${example} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/$<CONFIG>")

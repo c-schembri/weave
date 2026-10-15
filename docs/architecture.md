@@ -133,7 +133,7 @@ Connection objects are not shared concurrently between borrowers. A pool belongs
 to its creating Context or compatible work-stealing domain; affine workers use
 separate pools. Closing wakes acquisition waiters and retires idle sessions;
 existing leases drain independently and discard on return.
-[PostgreSQL pooling](../modules/postgres/README.md#pooling) / [MySQL pooling and reset](../modules/mysql/README.md#blocking-and-pooling).
+[PostgreSQL pooling](../modules/postgres/docs/usage.md#pooling) / [MySQL pooling and reset](../modules/mysql/docs/usage.md#blocking-and-pooling).
 
 ## Scope
 

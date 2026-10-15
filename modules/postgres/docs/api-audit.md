@@ -143,7 +143,7 @@ Mappings: [Diagnostic/notice API](observability.md#notices-and-notifications),
 
 ## Commands And Streaming Results
 
-Mappings: [query guide](../README.md), [pipeline guide](advanced.md#pipelines),
+Mappings: [query guide](usage.md), [pipeline guide](advanced.md#pipelines),
 [exchange guide](advanced.md#mixed-exchanges),
 [execution reference](https://www.postgresql.org/docs/18/libpq-exec.html) and
 [async reference](https://www.postgresql.org/docs/18/libpq-async.html).
