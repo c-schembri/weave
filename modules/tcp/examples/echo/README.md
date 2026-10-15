@@ -71,4 +71,4 @@ ctest --preset release -R '^echo_(weave|asio|libuv|usockets|trantor)_integration
 ```
 
 Run one server per port. The test owns only the processes it starts.
-[Networking contracts](../../../../docs/networking.md).
+[Networking contracts](../../README.md).

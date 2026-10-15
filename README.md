@@ -2,168 +2,105 @@
 
 [![Windows](https://github.com/c-schembri/weave/actions/workflows/windows.yml/badge.svg?branch=main)](https://github.com/c-schembri/weave/actions/workflows/windows.yml)
 
-Async networking for C++23. Small APIs, explicit ownership, no exceptions.
+Modular C++23 libraries for asynchronous services: execution, networking,
+database access and data handling. Small APIs, explicit ownership, no exceptions.
 
 **Experimental, not production-certified.** Windows IOCP and Linux io_uring.
 No epoll or macOS backend.
 
-[Features and roadmap](docs/features.md): current capabilities and planned additions.
+[Features and versions](docs/features.md) |
+[Build and install](docs/build.md) |
+[Documentation](docs/README.md)
 
-## Start Here
+## Implemented
 
-A concurrent TCP echo server:
-
-```cpp
-#include <weave/tcp.hpp>
-#include <weave/log.hpp>
-#include <span>
-
-int main()
-{
-  auto ctx = weave::Context::create();
-  if (!ctx)
-    return weave::report_error(ctx.error());
-
-  auto result = ctx->run(weave::tcp::serve(
-    "127.0.0.1",
-    8080,
-    {.no_delay = true},
-    weave::tcp::on_data(
-      [](weave::TcpStream &client, std::span<const std::byte> data) {
-        return client.write_all(data);
-      })));
-
-  if (!result)
-    return weave::report_error(result.error());
-}
-```
-
-`Task<T>` produces T or fails with std::error_code; awaited failures propagate
-automatically. Synchronous setup and `run()` return `Result<T>` (std::expected).
-`serve` owns concurrent clients; `on_data` owns their receive buffers and awaits
-each callback before reading again.
-
-Windows: VS 2022 C++ tools, CMake 3.25+, Git; Python 3.11+ for tests.
-
-```sh
-git clone https://github.com/c-schembri/weave.git
-cd weave
-cmake --preset windows-ci
-cmake --build --preset ci-release --parallel 4
-ctest --preset ci-release
-./build/windows-ci/Release/echo_server_context_minimal.exe
-```
-
-[Linux/WSL requirements and installation](docs/build.md) /
-[self-contained echo variants and other libraries](modules/tcp/examples/echo/README.md).
-
-## Main APIs
-
-**Execution:** Context runs on the calling thread; Runtime manages worker threads
-and Contexts. Both expose create/run/spawn/detach.
-
-```cpp
-auto runtime = weave::Runtime::create({
-  .workers = 4,
-  .scheduler = weave::Scheduler::work_stealing,
-});
-if (!runtime)
-  return weave::report_error(runtime.error());
-
-auto result = runtime->run(server());
-if (!result)
-  return weave::report_error(result.error());
-```
-
-Include `<weave/runtime.hpp>` for Runtime. Spawn returns a join handle; detach
-transfers ownership without one. `run` does not join unrelated tasks.
-[Execution, ownership and cancellation](docs/execution.md).
-
-**TCP:** Contextless setup uses the executing Task's Context.
-
-```cpp
-auto client = co_await weave::tcp::connect("localhost", 8080);
-auto listener = co_await weave::tcp::listen("127.0.0.1", 8080);
-auto accepted = co_await listener.accept({.no_delay = true});
-```
-
-Read/write Tasks are `read`, `read_exactly`, `write_all`; nonempty read returns
-zero at EOF. IPv4/IPv6, asynchronous DNS and local sockets share this ownership model.
-[TCP, local sockets and stream helpers](docs/networking.md).
-
-**Recovery and deadlines:** explicitly inspect errors only where recovery is wanted.
-
-```cpp
-using namespace std::chrono_literals;
-
-co_await weave::sleep_for(250ms);
-auto result = co_await weave::as_result(weave::timeout(5s, client.read(buffer)));
-if (!result)
-  WEAVE_LOG_ERROR("Read: %s", result.error().message().c_str());
-```
-
-Include `<weave/timer.hpp>`. Cancellation is cooperative: cancel, then join/drain
-before releasing borrowed streams/buffers. [Scopes and timers](docs/execution.md).
-
-**PostgreSQL:** native protocol, no libpq dependency.
-
-```cpp
-auto pool = co_await weave::pg::Pool::create(options);
-auto database = co_await pool.acquire();
-auto result = co_await database->execute("SELECT 42");
-// The lease returns automatically at scope exit.
-```
-
-Include `<weave/postgres.hpp>`. Queries, prepared statements, batching, COPY,
-streaming and blocking use share the same engine.
-[PostgreSQL API and pooling](docs/postgres.md) / [libpq compatibility](docs/postgres-api-audit.md).
-
-**MySQL:** native protocol over verified TLS, prepared statements, streaming,
-batching, pooling and blocking calls, with shared primitive/struct decoding.
-Include `<weave/mysql.hpp>`. [MySQL API and limits](docs/mysql.md) /
-[complete examples](modules/mysql/examples/README.md). Not full native-client parity.
-
-**Migrations:** explicit schema DSL, one C++ file per version, CMake-generated
-registration without Python. [API and recovery](docs/migrations.md).
-
-**JSON:** Glaze-backed struct conversion, synchronous checked results and reusable/fixed output buffers.
-[JSON API](docs/json.md).
-
-**TLS and synchronization:** verified OpenSSL streams, mTLS and explicit session/
-revocation controls; bounded Channel and Semaphore for backpressure/admission.
-[TLS](docs/tls.md) / [synchronization](docs/synchronization.md).
-
-## Use In Your Project
-
-Include/link only what you need. TCP does not require Runtime.
-
-| Component | Header | CMake target |
+| Area | Available | Guides |
 | --- | --- | --- |
-| Tasks, results, stream helpers | `<weave/core.hpp>`, `<weave/stream.hpp>` | `weave::core` |
-| JSON struct conversion | `<weave/json.hpp>` | `weave::json` |
-| Database storage, mapping and schema descriptions | `<weave/database.hpp>` | `weave::database` |
-| Context and timers | `<weave/io.hpp>` | `weave::io` |
-| Multicore runtime | `<weave/runtime.hpp>` | `weave::runtime` |
-| TCP | `<weave/tcp.hpp>` | `weave::tcp` |
-| Local sockets | `<weave/local.hpp>` | `weave::local` |
-| Channels/semaphores | `<weave/sync.hpp>` | `weave::sync` |
-| TLS (OpenSSL 3.5+) | `<weave/tls.hpp>` | `weave::tls` |
-| PostgreSQL (also ICU 70+) | `<weave/postgres.hpp>` | `weave::postgres` |
-| MySQL (TLS dependencies only) | `<weave/mysql.hpp>` | `weave::mysql` |
+| Execution | Coroutine Tasks, checked results, Context, multicore Runtime, scopes, cancellation and timers | [Execution](modules/io/README.md) |
+| Networking | TCP clients/servers, IPv4/IPv6, asynchronous DNS and local sockets | [Networking](modules/tcp/README.md) |
+| Security | Verified TLS, mutual TLS, ALPN, sessions and revocation policies | [TLS](modules/tls/README.md) |
+| Synchronization | Bounded channels and semaphores | [Synchronization](modules/sync/README.md) |
+| Databases | Native PostgreSQL/MySQL clients, pooling, row/struct mapping and schema migrations | [PostgreSQL](modules/postgres/README.md), [MySQL](modules/mysql/README.md), [migrations](modules/database/docs/migrations.md) |
+| Data | Glaze-backed JSON serialization and deserialization | [JSON](modules/json/README.md) |
+
+Async operations return `Task<T>`; fallible synchronous operations return `Result<T>`.
+Context drives the calling thread; Runtime adds managed worker threads. Modules are
+independent where possible: TCP does not require Runtime, and database clients do
+not require libpq or libmysqlclient.
+
+## Planned
+
+| Area | Targets |
+| --- | --- |
+| Networking | UDP, QUIC, HTTP/1.1, HTTP/2, HTTP/3 and WebSocket |
+| APIs | GraphQL clients, server execution and subscriptions; gRPC |
+| Databases | Additional SQL, NoSQL, graph, search and analytics vendors; compatibility qualification |
+| Messaging | Kafka, NATS/JetStream, RabbitMQ, AMQP, MQTT, Pulsar and cloud messaging |
+| Data | Protobuf, Avro, BSON, MessagePack and Schema Registry integration |
+| Storage | S3-compatible storage, Azure Blob Storage and Google Cloud Storage |
+| Execution and tooling | Blocking-work executor, asynchronous files and consistent metrics/tracing |
+| Releases | Linux CI, protocol fuzzing/interoperability, API versioning and a project license |
+
+The [full feature matrix](docs/features.md#planned) lists individual targets,
+dependencies and minimum versions. Planned features are not available modules.
+
+## Get Started
+
+C++23 and CMake 3.25+; Visual Studio 2022 on Windows or GCC 14+ on Linux.
+[Platform setup, optional dependencies and installation](docs/build.md).
+
+Select only the modules your application needs:
 
 ```cmake
 set(WEAVE_MODULES "tcp;runtime" CACHE STRING "" FORCE)
 add_subdirectory(external/weave)
+
 target_link_libraries(my_app PRIVATE weave::tcp weave::runtime)
 ```
 
-Installed packages support `find_package(weave CONFIG REQUIRED COMPONENTS tcp)`.
-[Build guide](docs/build.md) / [all documentation](docs/README.md).
+Each module exports `weave::<name>`. Installed packages also support
+`find_package(weave CONFIG REQUIRED COMPONENTS tcp)`.
+[Headers and CMake targets](docs/build.md#include-only-what-you-need).
+
+| Start With | Examples |
+| --- | --- |
+| TCP server | [Concurrent echo servers](modules/tcp/examples/echo/README.md) |
+| TLS server | [TLS echo](modules/tls/examples/echo/README.md) |
+| PostgreSQL | [Struct queries](modules/postgres/examples/queries/simple_struct.cpp), [pooling](modules/postgres/examples/connections/pool.cpp) |
+| MySQL | [Queries, streaming, pools and migrations](modules/mysql/examples/README.md) |
+| Data conversion | [JSON structs](modules/json/examples/struct.cpp), [database mapping](modules/database/examples/mapping.cpp) |
+
+## Repository Map
+
+| Location | Contents |
+| --- | --- |
+| [modules/](modules/) | Feature-owned public headers, implementation, guides, tests, examples and benchmarks |
+| [development/](development/README.md) | Shared build, packaging, testing and benchmark infrastructure |
+| [docs/](docs/README.md) | Documentation index, feature matrix, build guide and architecture |
+| [.github/workflows/](.github/workflows/) | Windows correctness CI |
+
+For changes, start with the [architecture](docs/architecture.md) and
+[development rules](AGENTS.md). Each feature lives under `modules/<name>/`;
+the [documentation index](docs/README.md) is the complete guide directory.
+
+## Testing And Benchmarks
+
+Windows CI runs Debug, Release and AddressSanitizer correctness checks.
+Linux testing is available locally; Linux CI is planned. Benchmarks are manual,
+hardware-specific measurements, separate from correctness gates.
+
+[Testing and deployment limits](development/testing/README.md) |
+[Benchmark guide](development/benchmarks/README.md) |
+[Runtime scaling](modules/runtime/benchmarks/README.md) |
+[PostgreSQL benchmarks](modules/postgres/benchmarks/README.md)
 
 ## Local Runtime Benchmarks
 
 Hosted CI runs correctness tests only. Local measurements reserve fixed separate
 client cores and test 1/2/4/8/16/32 server cores where hardware permits.
+
+<details>
+<summary>Local runtime results and provenance</summary>
 
 <!-- benchmark-results:start -->
 Local Windows run: 2026-10-06 18:26 +1100, AMD Ryzen 9 9900X 12-Core Processor. Source: [`dd0d265`](https://github.com/c-schembri/weave/commit/dd0d265e711ec31580daf93715ef8b547da4f615).
@@ -187,17 +124,15 @@ Paired change is the median of within-repetition ratios, not the ratio of the di
 
 Closed-loop loopback results, not universal runtime rankings. Client-busy rows do not establish maximum server capacity; noisy comparisons are inconclusive for the affected metric.
 
-[Full measurements and raw evidence](https://github.com/c-schembri/weave/releases/tag/benchmarks-20261006-182604) / [methodology](https://github.com/c-schembri/weave/blob/main/docs/runtime-scaling.md).
+[Full measurements and raw evidence](https://github.com/c-schembri/weave/releases/tag/benchmarks-20261006-182604) / [methodology](modules/runtime/benchmarks/README.md).
 <!-- benchmark-results:end -->
 
 Shared IOCP stays opt-in; default-layout throughput was essentially unchanged.
-[Scaling, CPU/tail findings and reproduction](docs/runtime-scaling.md) /
-[latest PostgreSQL/libpq measurements](docs/postgres-benchmarks.md).
+[Scaling, CPU/tail findings and reproduction](modules/runtime/benchmarks/README.md) /
+[latest PostgreSQL/libpq measurements](modules/postgres/benchmarks/README.md).
 
-## Development
+</details>
 
-Windows CI covers MSVC Debug, Release and AddressSanitizer. Benchmarks are manual;
-raw evidence is uploaded separately, not tracked. [Testing](docs/testing.md) /
-[architecture](docs/architecture.md) / [development rules](AGENTS.md).
+## License
 
 No project license has been selected. Third-party dependencies retain their licenses.

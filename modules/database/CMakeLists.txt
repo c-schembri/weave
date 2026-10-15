@@ -1,9 +1,9 @@
 add_library(weave_database INTERFACE)
 weave_module(database)
 target_link_libraries(weave_database INTERFACE weave::core)
-include("${PROJECT_SOURCE_DIR}/cmake/WeaveMigrations.cmake")
-install(FILES "${PROJECT_SOURCE_DIR}/cmake/WeaveMigrations.cmake"
-  "${PROJECT_SOURCE_DIR}/cmake/migration_manifest.in"
+include("${PROJECT_SOURCE_DIR}/modules/database/cmake/WeaveMigrations.cmake")
+install(FILES "${PROJECT_SOURCE_DIR}/modules/database/cmake/WeaveMigrations.cmake"
+  "${PROJECT_SOURCE_DIR}/modules/database/cmake/migration_manifest.in"
   DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/weave")
 
 # Build-only support for async drivers; never exported as a consumer component.

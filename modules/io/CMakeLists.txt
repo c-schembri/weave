@@ -26,7 +26,7 @@ if(WEAVE_BUILD_TESTS)
   weave_add_test(weave_io_tests tests/context.cpp tests/spawn.cpp tests/custom_runtime.cpp
     tests/cancellation.cpp tests/timer.cpp tests/scope.cpp tests/address.cpp tests/resolve.cpp)
   target_link_libraries(weave_io_tests PRIVATE weave::io Threads::Threads)
-  target_include_directories(weave_io_tests PRIVATE src)
+  target_include_directories(weave_io_tests PRIVATE src "${PROJECT_SOURCE_DIR}/development/testing/support")
   target_compile_definitions(weave_io_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0602)
   if(NOT WIN32)
     target_sources(weave_io_tests PRIVATE tests/linux.cpp)

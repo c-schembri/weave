@@ -18,4 +18,4 @@ private keys, or insecure verification bypasses are shipped with this example.
 Use a trusted issuer or configure the client with the issuer's CA file.
 
 The example uses one calling thread. Replacing Context setup with Runtime setup
-does not change the TLS handler. See [TLS contracts](../../../../docs/tls.md).
+does not change the TLS handler. See [TLS contracts](../../README.md).

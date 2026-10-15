@@ -13,13 +13,22 @@ modules/<feature>/
   tests/               feature correctness tests
   examples/            self-contained usage examples
   benchmarks/          feature-owned measurements
-tests/integration/     cross-module correctness
-test_support/          shared, noninstalled fixtures
-benchmarks/support/    shared measurement harness
-benchmarks/integration/
-                       whole-system workloads
-docs/                  user guides, testing and measurement contracts
+  README.md            main feature guide
+  docs/                additional feature guides
+  cmake/               feature-owned build helpers
+development/
+  build/               shared CMake policies
+  packaging/           package configuration and consumer tests
+  testing/integration/ cross-module correctness
+  testing/support/     shared, noninstalled fixtures
+  benchmarks/          shared harnesses, orchestration and tooling tests
+docs/                  repository overview, feature matrix and build guide
 ```
+
+Each development component owns its CMake registration. Feature-specific tools
+and their tests stay with the module; shared infrastructure is never installed
+as a public Weave component. Local build outputs and archived benchmark evidence
+are not source modules.
 
 Only create protocol modules when implementing them. Future HTTP/WebSocket
 adapters should be separate where possible; using WebSocket framing should not
@@ -41,8 +50,8 @@ native types. libpq/libmysqlclient exist only in optional comparison targets.
 ### Database Foundation
 
 The foundation separates reusable database machinery from PostgreSQL and MySQL,
-preserving their vendor-specific APIs. SQLite, Oracle and
-SQL Server are design constraints, not implemented drivers or a new feature backlog.
+preserving their vendor-specific APIs. Additional drivers and compatibility targets
+are listed in the [feature matrix](features.md#planned), not implemented modules.
 
 - **`weave::database`:** Core-only arena/container storage, column lookup, fixed-array
   selector binding, record mapping and synchronized pool inventory/options.
@@ -111,7 +120,7 @@ Task failure is routed while the parent is suspended, before its normal
 Ownership reclaims failed chains inside-out; recovery adapters stop propagation
 at explicit boundaries. Joined children drain before enclosing frames are freed.
 This is a cooperating coroutine model, not automatic error handling for arbitrary
-C++ awaiters. [Public execution and lifetime contracts](execution.md).
+C++ awaiters. [Public execution and lifetime contracts](../modules/io/README.md).
 
 ## Database Pooling
 
@@ -124,7 +133,7 @@ Connection objects are not shared concurrently between borrowers. A pool belongs
 to its creating Context or compatible work-stealing domain; affine workers use
 separate pools. Closing wakes acquisition waiters and retires idle sessions;
 existing leases drain independently and discard on return.
-[PostgreSQL pooling](postgres.md#pooling) / [MySQL pooling and reset](mysql.md#blocking-and-pooling).
+[PostgreSQL pooling](../modules/postgres/README.md#pooling) / [MySQL pooling and reset](../modules/mysql/README.md#blocking-and-pooling).
 
 ## Scope
 
@@ -132,4 +141,4 @@ Implemented: core Tasks, IO, runtime, TCP, local sockets, synchronization, TLS a
 native PostgreSQL/MySQL. HTTP, WebSocket, portable asynchronous files, general blocking
 work offload and a macOS backend are not implemented. Linux shared I/O and Linux
 correctness CI remain separate work. TLS and database clients are experimental, not certified
-production-ready. [Qualification and deployment limits](testing.md).
+production-ready. [Qualification and deployment limits](../development/testing/README.md).

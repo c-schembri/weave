@@ -4,24 +4,24 @@ Start with the [project README](../README.md), then open the guide for the featu
 
 | Guide | Contents |
 | --- | --- |
-| [Features and roadmap](features.md) | High-level current capabilities, planned additions and scope boundaries |
+| [Features and versions](features.md) | Implemented/planned feature tables, minimum versions and dependencies |
 | [Build](build.md) | Requirements, CMake components, installation and Windows/Linux setup |
-| [JSON](json.md) | Glaze struct conversion, buffer APIs, diagnostics and validation boundaries |
-| [Execution](execution.md) | Context, Runtime, Tasks, ownership, cancellation and timers |
-| [Networking](networking.md) | TCP, addresses, DNS, local sockets and stream helpers |
-| [Synchronization](synchronization.md) | Bounded channels and semaphores |
-| [TLS](tls.md) | Verified connections, mTLS, sessions, revocation and credential policy |
-| [PostgreSQL](postgres.md) | Queries, results, streaming, COPY, pooling and blocking use |
-| [MySQL](mysql.md) | Prepared/text queries, streaming, pooling, blocking use and migrations |
-| [Migrations](migrations.md) | Schema DSL, per-file CMake registration, execution and recovery |
-| [PostgreSQL connections](postgres-connections.md) | Configuration, authentication, TLS modes, failover and cancellation |
-| [PostgreSQL advanced](postgres-advanced.md) | Pipelines, portals, mixed exchanges, replication and large objects |
-| [PostgreSQL observability](postgres-observability.md) | Diagnostics, metadata, callbacks, tracing and result storage |
-| [libpq mapping](postgres-api-audit.md) | Function-by-function compatibility and intentional differences |
-| [Benchmarks](benchmarks.md) | Running and interpreting local comparisons |
-| [Runtime scaling](runtime-scaling.md) | Weave/Asio/Tokio methodology and measured limits |
-| [PostgreSQL benchmarks](postgres-benchmarks.md) | Matched libpq results and reproduction |
-| [Testing](testing.md) | Correctness gates, sanitizer coverage and deployment limits |
+| [JSON](../modules/json/README.md) | Glaze struct conversion, buffer APIs, diagnostics and validation boundaries |
+| [Execution](../modules/io/README.md) | Context, Runtime, Tasks, ownership, cancellation and timers |
+| [Networking](../modules/tcp/README.md) | TCP, addresses, DNS, local sockets and stream helpers |
+| [Synchronization](../modules/sync/README.md) | Bounded channels and semaphores |
+| [TLS](../modules/tls/README.md) | Verified connections, mTLS, sessions, revocation and credential policy |
+| [PostgreSQL](../modules/postgres/README.md) | Queries, results, streaming, COPY, pooling and blocking use |
+| [MySQL](../modules/mysql/README.md) | Prepared/text queries, streaming, pooling, blocking use and migrations |
+| [Migrations](../modules/database/docs/migrations.md) | Schema DSL, per-file CMake registration, execution and recovery |
+| [PostgreSQL connections](../modules/postgres/docs/connections.md) | Configuration, authentication, TLS modes, failover and cancellation |
+| [PostgreSQL advanced](../modules/postgres/docs/advanced.md) | Pipelines, portals, mixed exchanges, replication and large objects |
+| [PostgreSQL observability](../modules/postgres/docs/observability.md) | Diagnostics, metadata, callbacks, tracing and result storage |
+| [libpq mapping](../modules/postgres/docs/api-audit.md) | Function-by-function compatibility and intentional differences |
+| [Benchmarks](../development/benchmarks/README.md) | Running and interpreting local comparisons |
+| [Runtime scaling](../modules/runtime/benchmarks/README.md) | Weave/Asio/Tokio methodology and measured limits |
+| [PostgreSQL benchmarks](../modules/postgres/benchmarks/README.md) | Matched libpq results and reproduction |
+| [Testing](../development/testing/README.md) | Correctness gates, sanitizer coverage and deployment limits |
 | [Architecture](architecture.md) | Module layout and implementation boundaries |
 
 Examples: [TCP echo](../modules/tcp/examples/echo/README.md),

@@ -6,7 +6,7 @@
 #include <optional>
 #include <thread>
 #include <vector>
-#include "../../../test_support/context_fixture.hpp"
+#include "context_fixture.hpp"
 
 // A minimal external coordinator: no Runtime, native headers, or detail APIs.
 class ContextThread {

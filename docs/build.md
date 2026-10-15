@@ -38,6 +38,20 @@ MySQL adds Database and TLS, with private OpenSSL Crypto authentication; it does
 JSON uses pinned vendored Glaze headers; no consumer fetch or separately installed package is required.
 There is no all-features umbrella target or shared-library ABI/export support.
 
+| Component | Header | CMake target |
+| --- | --- | --- |
+| Tasks, results, stream helpers | `<weave/core.hpp>`, `<weave/stream.hpp>` | `weave::core` |
+| JSON struct conversion | `<weave/json.hpp>` | `weave::json` |
+| Database storage, mapping and schema descriptions | `<weave/database.hpp>` | `weave::database` |
+| Context and timers | `<weave/io.hpp>` | `weave::io` |
+| Multicore runtime | `<weave/runtime.hpp>` | `weave::runtime` |
+| TCP | `<weave/tcp.hpp>` | `weave::tcp` |
+| Local sockets | `<weave/local.hpp>` | `weave::local` |
+| Channels/semaphores | `<weave/sync.hpp>` | `weave::sync` |
+| TLS | `<weave/tls.hpp>` | `weave::tls` |
+| PostgreSQL | `<weave/postgres.hpp>` | `weave::postgres` |
+| MySQL | `<weave/mysql.hpp>` | `weave::mysql` |
+
 Library-only builds do not fetch test/comparison dependencies. Tests, examples
 and benchmarks are independent opt-ins, off by default:
 `WEAVE_BUILD_TESTS`, `WEAVE_BUILD_EXAMPLES`, `WEAVE_BUILD_BENCHMARKS`.
@@ -115,5 +129,5 @@ cmake --build ~/.cache/weave --parallel 4
 ctest --test-dir ~/.cache/weave --output-on-failure --no-tests=error
 ```
 
-[Correctness and optional deployment gates](testing.md) /
-[Local benchmark instructions](benchmarks.md).
+[Correctness and optional deployment gates](../development/testing/README.md) /
+[Local benchmark instructions](../development/benchmarks/README.md).

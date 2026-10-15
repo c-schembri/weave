@@ -107,7 +107,7 @@
   Existing benchmark smoke tests validate correctness, not performance.
 - Correctness CI configures WEAVE_BUILD_BENCHMARKS=OFF and excludes benchmark
   smokes. Do not run networking measurements on the undersized hosted Windows VM.
-  Run local Weave/Asio/Tokio runtime scaling with scripts/bench_scaling.py instead.
+  Run local Weave/Asio/Tokio runtime scaling with modules/runtime/benchmarks/tools/bench_scaling.py instead.
   Request 1/2/4/8/16/32 server cores, one worker per physical core, with a fixed
   separate client-core budget. Mark unsupported counts unavailable; never silently
   oversubscribe workers or change client placement/budget to manufacture scaling.
@@ -174,7 +174,8 @@
   does not extend its captured references. Check contracts against implementation;
   avoid boilerplate on trivial members or treating one discussed API as the full scope.
 - Keep README focused on entry-point APIs. Maintain one canonical guide per topic
-  under docs/, linked from docs/README.md; consolidate related contracts instead of
+  beside its owning module, linked from docs/README.md; reserve root docs/ for
+  repository-wide overviews and build guidance. Consolidate related contracts instead of
   adding another checkpoint/qualification diary. Keep security and ownership limits,
   current reproduction commands and benchmark provenance. Historical investigations
   belong in Git history or ignored evidence, not duplicated user-facing pages.
@@ -234,7 +235,10 @@
   Keep those gates on upgrades; never substitute ordinary strings or a lossy DOM.
 - Organize code by feature under modules/<name>/. Each module owns its
   CMakeLists.txt, include/weave/ headers, src/ implementation, tests/, examples/,
-  and benchmarks/ where applicable. Do not create empty directories.
+  benchmarks/, guides and feature-specific tools where applicable. Shared build,
+  packaging, testing and benchmark infrastructure belongs to development/<component>/,
+  with its own CMake registration. Do not recreate root scripts/, tests/ or test_support/
+  buckets, add development components to the public library API, or create empty directories.
 - Example and benchmark ownership follows the feature demonstrated or measured,
   not every dependency it uses. TCP comparisons against Asio/libuv/uSockets belong
   to TCP; scheduler comparisons belong to runtime. Split mixed-responsibility files.
@@ -242,9 +246,10 @@
   comparisons in meaningful subdirectories. Let the directory carry repeated naming;
   keep each source self-contained and one README for the family. Preserve executable
   names and output paths during source-only reorganizations.
-- Keep shared benchmark harness code in benchmarks/support/, whole-system workloads
-  in benchmarks/integration/, and ignored local outputs in benchmarks/results/.
-  Root CMake assembles the suite; modules declare their own benchmark sources.
+- Keep shared benchmark harness code in development/benchmarks/support/ and
+  whole-system workloads in development/benchmarks/integration/. Preserve ignored
+  local outputs in benchmarks/results/. Development's benchmark CMake assembles
+  the suite; modules declare their own benchmark sources and tooling tests.
 - Benchmark and example dependencies stay private to their build targets. They
   must not become library dependencies. Preserve benchmark names, parameters,
   workload bodies, and executable paths during organizational changes.
@@ -764,7 +769,7 @@
   an owner-private regular file. No ambient SSLKEYLOGFILE opt-in, automatic logger,
   secret-path configuration export or silent setup/write failure. Preserve file
   and credential ownership through concurrent handshakes and stream destruction.
-  Require supported security-patched OpenSSL and rerun docs/testing.md gates
+  Require supported security-patched OpenSSL and rerun development/testing/README.md gates
   for security-sensitive changes; never describe automated tests as a security audit.
   Cleanse owned private-key passphrases on factory validation/provider failures as
   well as identity loading. Best-effort owned-buffer cleansing does not erase
@@ -802,8 +807,9 @@
 - Keep platform implementations under their owner's src/windows/ (and
   src/linux/). TCP uses IO's private backend contract; protocol modules should use
   transport APIs, not reach into IOCP internals or the runtime scheduler.
-- Put cross-module correctness tests in tests/integration/ and shared C++ fixtures
-  in test_support/. Neither is installed or linked into library targets.
+- Put cross-module correctness tests in development/testing/integration/ and shared
+  C++ fixtures in development/testing/support/. Neither is installed or linked into
+  library targets. Packaging tests belong to development/packaging/tests/.
 - Tests, examples, and benchmarks are opt-in for consumers. A library-only build
   must not fetch comparison/test dependencies. Development presets opt in explicitly.
 - Run the component packaging tests when changing module or build boundaries:

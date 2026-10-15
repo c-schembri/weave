@@ -3,7 +3,7 @@
 #include <memory>
 #include <thread>
 #include <vector>
-#include "../../../test_support/context_fixture.hpp"
+#include "context_fixture.hpp"
 
 struct ContextCapture {
   int &destroyed;

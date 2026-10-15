@@ -25,8 +25,7 @@ if(WEAVE_BUILD_BENCHMARKS AND NOT WIN32)
 endif()
 
 include(GNUInstallDirs)
-include(CMakePackageConfigHelpers)
-include(cmake/WeaveModule.cmake)
+include(development/build/WeaveModule.cmake)
 
 set(WEAVE_ENABLED_MODULES core)
 foreach(module IN LISTS WEAVE_MODULES)
@@ -55,10 +54,6 @@ endif()
 if(WEAVE_BUILD_TESTS)
   enable_testing()
   find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
-  foreach(script IN ITEMS automation gate gate_process tokio_benchmark scaling_benchmark trace_runtime)
-    add_test(NAME ${script}_tests COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/${script}.py")
-    set_tests_properties(${script}_tests PROPERTIES TIMEOUT 60 LABELS tooling)
-  endforeach()
   include(FetchContent)
   set(DOCTEST_NO_INSTALL ON CACHE BOOL "" FORCE)
   FetchContent_Declare(doctest GIT_REPOSITORY https://github.com/doctest/doctest.git
@@ -76,15 +71,6 @@ foreach(module IN ITEMS core json database io runtime tcp local sync tls postgre
   endif()
 endforeach()
 
-configure_package_config_file(cmake/weave-config.cmake.in
-  "${CMAKE_CURRENT_BINARY_DIR}/weave-config.cmake"
-  INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/weave")
-write_basic_package_version_file("${CMAKE_CURRENT_BINARY_DIR}/weave-config-version.cmake"
-  VERSION ${PROJECT_VERSION} COMPATIBILITY SameMajorVersion)
-install(FILES "${CMAKE_CURRENT_BINARY_DIR}/weave-config.cmake"
-  "${CMAKE_CURRENT_BINARY_DIR}/weave-config-version.cmake"
-  DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/weave")
-
 set(WEAVE_FULL_TESTS OFF)
 if(WEAVE_BUILD_TESTS AND TARGET weave_tcp AND TARGET weave_runtime)
   set(WEAVE_FULL_TESTS ON)
@@ -95,66 +81,12 @@ if(WEAVE_FULL_TESTS OR WEAVE_BUILD_BENCHMARKS)
     GIT_TAG 366dfc44640182cb21c1ebf7efb658a6bec13f5a)
   FetchContent_MakeAvailable(asio)
 endif()
-if(WEAVE_FULL_TESTS)
-  weave_add_test(weave_tests tests/integration/main.cpp tests/integration/runtime.cpp
-    tests/integration/task.cpp tests/integration/task_concurrent.cpp tests/integration/cancellation.cpp
-    tests/integration/serve.cpp tests/integration/endpoints.cpp)
-  if(WIN32)
-    target_sources(weave_tests PRIVATE tests/benchmark_affinity.cpp)
-  endif()
-  target_link_libraries(weave_tests PRIVATE weave::tcp weave::runtime)
-  target_include_directories(weave_tests PRIVATE test_support)
-  target_include_directories(weave_tests SYSTEM PRIVATE ${asio_SOURCE_DIR}/asio/include)
-  target_compile_definitions(weave_tests PRIVATE ASIO_STANDALONE ASIO_NO_EXCEPTIONS)
-endif()
+add_subdirectory(development)
 
-if(TARGET weave_tests)
-  target_compile_definitions(weave_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0602)
-endif()
-if(WEAVE_BUILD_BENCHMARKS)
-  add_subdirectory(benchmarks)
-endif()
 if(WEAVE_BUILD_EXAMPLES)
   foreach(module IN LISTS WEAVE_ENABLED_MODULES)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/modules/${module}/examples/CMakeLists.txt")
       add_subdirectory(modules/${module}/examples)
     endif()
-  endforeach()
-endif()
-
-if(WEAVE_BUILD_TESTS)
-  set(package_cases ${WEAVE_ENABLED_MODULES})
-  if("tcp" IN_LIST WEAVE_ENABLED_MODULES AND "runtime" IN_LIST WEAVE_ENABLED_MODULES)
-    list(APPEND package_cases all)
-  endif()
-  foreach(component IN LISTS package_cases)
-    add_test(NAME package_components_${component} COMMAND "${CMAKE_COMMAND}"
-      "-DWEAVE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}"
-      "-DWEAVE_WORK=${CMAKE_CURRENT_BINARY_DIR}/package-tests"
-      "-DWEAVE_GENERATOR=${CMAKE_GENERATOR}"
-      "-DWEAVE_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
-      "-DWEAVE_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
-      "-DWEAVE_CONFIG=$<CONFIG>"
-      "-DWEAVE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
-      "-DWEAVE_TEST_MODULES=${component}"
-      "-DWEAVE_ASAN=${WEAVE_ENABLE_ASAN}"
-      "-DWEAVE_PACKAGE_TLS=$<TARGET_EXISTS:weave_tls>"
-      "-DWEAVE_PACKAGE_POSTGRES=$<TARGET_EXISTS:weave_postgres>"
-      "-DWEAVE_PACKAGE_MYSQL=$<TARGET_EXISTS:weave_mysql>"
-      "-DWEAVE_POSTGRES_GSSAPI=${WEAVE_POSTGRES_GSSAPI}"
-      "-DWEAVE_POSTGRES_LDAP=${WEAVE_POSTGRES_LDAP}"
-      "-DWeaveLDAP_INCLUDE_DIR=${WeaveLDAP_INCLUDE_DIR}"
-      "-DWeaveLDAP_LIBRARY=${WeaveLDAP_LIBRARY}"
-      "-DWEAVE_PACKAGE_LOCAL=$<TARGET_EXISTS:weave_local>"
-      "-DICU_ROOT=${ICU_ROOT}"
-      "-DOPENSSL_ROOT_DIR=${OPENSSL_ROOT_DIR}"
-      "-DOPENSSL_USE_STATIC_LIBS=${OPENSSL_USE_STATIC_LIBS}"
-      "-DWEAVE_TLS_RUNTIME_DIR=${WEAVE_TLS_RUNTIME_DIR}"
-      -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/package/components.cmake")
-    set(package_timeout 180)
-    if(component STREQUAL "postgres" OR (component STREQUAL "all" AND TARGET weave_postgres))
-      set(package_timeout 600)
-    endif()
-    set_tests_properties(package_components_${component} PROPERTIES TIMEOUT ${package_timeout} LABELS packaging)
   endforeach()
 endif()

@@ -18,9 +18,9 @@ WORKLOADS = ("connect", "simple", "extended", "prepared", "binary", "batch", "ro
 def source_fingerprint():
     root = Path(__file__).resolve().parents[3]
     digest = hashlib.sha256()
-    files = [root / "CMakeLists.txt", root / "cmake" / "WeaveModule.cmake"]
-    files.append(root / "test_support" / "tls_certificates.hpp")
-    files.append(root / "test_support" / "benchmark_affinity.hpp")
+    files = [root / "CMakeLists.txt", root / "development/build/WeaveModule.cmake"]
+    files.append(root / "development/testing/support" / "tls_certificates.hpp")
+    files.append(root / "development/testing/support" / "benchmark_affinity.hpp")
     for module in ("core", "database", "io", "runtime", "tcp", "sync", "tls", "postgres"):
         files.extend(path for path in (root / "modules" / module).rglob("*")
                      if path.is_file() and path.suffix in (".cpp", ".hpp", ".txt", ".py"))

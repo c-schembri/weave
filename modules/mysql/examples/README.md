@@ -37,4 +37,4 @@ The migration example additionally requires a `shipping` database and creates it
 No example disables TLS verification. For mTLS add `certificate_file` and
 `private_key_file` to the client TLS policy. Keep borrowed arrays/views alive until
 their Tasks and cancellation cleanup finish; statement/stream handles lease their
-connection. [API, security and lifetime contracts](../../../docs/mysql.md).
+connection. [API, security and lifetime contracts](../README.md).

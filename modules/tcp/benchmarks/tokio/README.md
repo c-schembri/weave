@@ -8,10 +8,10 @@ Cargo.lock pins the dependency graph.
 cmake --preset windows-runtime-bench
 cmake --build --preset runtime-bench --parallel 4
 rustup run 1.94.0 cargo build --release --locked --manifest-path modules/tcp/benchmarks/tokio/Cargo.toml --target-dir build/tokio
-python scripts/bench_scaling.py run
+python modules/runtime/benchmarks/tools/bench_scaling.py run
 ```
 
-[Scaling protocol, hardware limits, publication and latest results](../../../../docs/runtime-scaling.md)
+[Scaling protocol, hardware limits, publication and latest results](../../../runtime/benchmarks/README.md)
 is the canonical guide. It compares sequential fresh-process windows and retains
 every sample, CPU/cycles, RTT tails, checksums and source/binary provenance.
 
@@ -19,8 +19,8 @@ The separate fixed-four-worker stress driver uses eight physically separate clie
 cores and requires twelve accessible physical cores in one processor group:
 
 ```sh
-python scripts/bench_tokio.py
-python scripts/bench_tokio.py --smoke --duration-ms 100 --repetitions 1 --timeout-seconds 60
+python modules/runtime/benchmarks/tools/bench_tokio.py
+python modules/runtime/benchmarks/tools/bench_tokio.py --smoke --duration-ms 100 --repetitions 1 --timeout-seconds 60
 cargo test --locked --manifest-path modules/tcp/benchmarks/tokio/Cargo.toml --target-dir build/tokio
 ```
 
